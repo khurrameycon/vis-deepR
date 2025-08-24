@@ -217,6 +217,45 @@ class CustomAgent(Agent):
                 return True
         return False
     
+    # @time_execution_async("--get_next_action")
+    # async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
+    #     """Get next action from LLM based on current state"""
+    #     fixed_input_messages = self._convert_input_messages(input_messages)
+    #     ai_message = self.llm.invoke(fixed_input_messages)
+    #     self.message_manager._add_message_with_tokens(ai_message)
+
+    #     if hasattr(ai_message, "reasoning_content"):
+    #         logger.info("🤯 Start Deep Thinking: ")
+    #         logger.info(ai_message.reasoning_content)
+    #         logger.info("🤯 End Deep Thinking")
+
+    #     if isinstance(ai_message.content, list):
+    #         ai_content = ai_message.content[0]
+    #     else:
+    #         ai_content = ai_message.content
+
+    #     try:
+    #         ai_content = ai_content.replace("```json", "").replace("```", "")
+    #         ai_content = repair_json(ai_content)
+    #         parsed_json = json.loads(ai_content)
+    #         parsed: AgentOutput = self.AgentOutput(**parsed_json)
+    #     except Exception as e:
+    #         import traceback
+    #         traceback.print_exc()
+    #         logger.debug(ai_message.content)
+    #         raise ValueError('Could not parse response.')
+
+    #     if parsed is None:
+    #         logger.debug(ai_message.content)
+    #         raise ValueError('Could not parse response.')
+
+    #     # cut the number of actions to max_actions_per_step if needed
+    #     if len(parsed.action) > self.settings.max_actions_per_step:
+    #         parsed.action = parsed.action[: self.settings.max_actions_per_step]
+    #     self._log_response(parsed)
+    #     return parsed
+
+
     @time_execution_async("--get_next_action")
     async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
         """Get next action from LLM based on current state"""
@@ -238,11 +277,24 @@ class CustomAgent(Agent):
             ai_content = ai_content.replace("```json", "").replace("```", "")
             ai_content = repair_json(ai_content)
             parsed_json = json.loads(ai_content)
+            
+            # DEBUG: Log the action types before parsing
+            if 'action' in parsed_json:
+                logger.debug(f"Action types before parsing: {[type(a) for a in parsed_json['action']]}")
+                logger.debug(f"Actions content: {parsed_json['action']}")
+            
             parsed: AgentOutput = self.AgentOutput(**parsed_json)
+            
+            # VALIDATION: Check if actions are proper objects
+            for i, action in enumerate(parsed.action):
+                if isinstance(action, dict):
+                    logger.error(f"Action {i} is still a dict after parsing: {action}")
+                    # This will help us see when the conversion fails
+                    
         except Exception as e:
             import traceback
             traceback.print_exc()
-            logger.debug(ai_message.content)
+            logger.debug(f"Failed to parse AI response: {ai_message.content}")
             raise ValueError('Could not parse response.')
 
         if parsed is None:
@@ -254,6 +306,7 @@ class CustomAgent(Agent):
             parsed.action = parsed.action[: self.settings.max_actions_per_step]
         self._log_response(parsed)
         return parsed
+
 
     async def _run_planner(self) -> Optional[str]:
         """Run the planner to analyze state and suggest next steps"""

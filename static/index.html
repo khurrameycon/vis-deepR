@@ -270,6 +270,75 @@
                 font-size: 2em;
             }
         }
+        .document-panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            margin: 20px 0;
+            overflow: hidden;
+        }
+
+        .document-header {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .document-content {
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: Georgia, serif;
+            line-height: 1.6;
+        }
+
+        .feedback-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .feedback-prompt {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        #feedback-input {
+            width: 100%;
+            min-height: 80px;
+            margin-bottom: 10px;
+        }
+
+        .feedback-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .document-status {
+            background: #28a745;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .document-status.writing {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .document-status.error {
+            background: #dc3545;
+        }
     </style>
 </head>
 <body>
@@ -374,6 +443,30 @@
                 
                 <div class="research-log" id="research-log" style="display: none;"></div>
             </div>
+
+
+            <!-- Add this after the browser-view div -->
+            <div class="document-panel" id="document-panel" style="display: none;">
+                
+                <div class="document-header">
+                    <h3>📄 Research Document</h3>
+                    <div class="document-controls">
+                        <span id="document-status" class="document-status">Ready</span>
+                        <button onclick="toggleDocumentView()" class="btn-toggle">Hide Document</button>
+                    </div>
+                </div>
+                <div class="document-content" id="live-document">
+                    <p class="placeholder">Document will appear here as research progresses...</p>
+                </div>
+                <div class="feedback-section" id="feedback-section" style="display: none;">
+                    <div class="feedback-prompt" id="feedback-prompt">Provide feedback:</div>
+                    <textarea id="feedback-input" placeholder="Enter your feedback or suggestions..."></textarea>
+                    <div class="feedback-buttons">
+                        <button onclick="submitFeedback()" class="btn btn-primary">Submit Feedback</button>
+                        <button onclick="continueWithoutFeedback()" class="btn btn-secondary">Continue Research</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -436,6 +529,8 @@
         }
         
        function handleWebSocketMessage(message) {
+            console.log('WebSocket message received:', message);
+        
             if (message.type === 'research_update') {
                 // The actual update type (e.g., 'screenshot', 'status') is inside message.data
                 handleResearchUpdate(message.data);
@@ -448,7 +543,17 @@
             }
         }
         
+        function updateDocumentStatus(status, message) {
+            const statusElement = document.getElementById('document-status');
+            if (statusElement) {
+                statusElement.textContent = message || status;
+                statusElement.className = `document-status ${status}`;
+            }
+        }
+
+
         function handleResearchUpdate(updatePayload) { // Renamed for clarity
+            console.log('Research update payload:', updatePayload); 
             const updateType = updatePayload.type;
 
             switch (updateType) {
@@ -475,9 +580,47 @@
                     addLogEntry(`❌ ${updatePayload.message}`);
                     researchComplete();
                     break;
+                
+
+                case 'document_update':
+                    updateLiveDocument(updatePayload.content, updatePayload.section);
+                    
+                    // Update document status based on section
+                    if (updatePayload.section && updatePayload.section.startsWith('search_')) {
+                        updateDocumentStatus('writing', 'Searching...');
+                    } else if (updatePayload.section && updatePayload.section.startsWith('summary_')) {
+                        updateDocumentStatus('writing', 'Adding Paper...');
+                    }
+                    
+                    addLogEntry(`📝 Document updated: ${updatePayload.section}`);
+                    break;
+
+                case 'section_complete':
+                    addLogEntry(`✅ Completed: ${updatePayload.section_name}`);
+                    highlightCompletedSection(updatePayload.section_id);
+                    break;
+
+                case 'waiting_feedback':
+                    showFeedbackInterface(updatePayload.message, updatePayload.current_document);
+                    addLogEntry(`⏸️ ${updatePayload.message}`);
+                    break;
+
+                case 'context_update':
+                    updateResearchContext(updatePayload.context);
+                    addLogEntry(`🧠 Research focus updated`);
+                    break;
 
                 case 'plan':
                     addLogEntry(`📋 ${updatePayload.message}`);
+                    break;
+                
+                case 'document_update':
+                    updateLiveDocument(updatePayload.content, updatePayload.section);
+                    addLogEntry(`📝 Document updated: ${updatePayload.section}`);
+                    break;
+
+                case 'agent_log':
+                    addLogEntry(updatePayload.message);
                     break;
 
                 case 'search':
@@ -516,7 +659,17 @@
                     updateButtons(true);
                     updateStatus('starting', 'Research starting...');
                     clearLog();
+                    
+                    documentSections = {
+                        header: `# Research Report: ${topic}\n\n`,
+                        intro: "",
+                        literature: "",
+                        analysis: "",
+                        references: "",
+                        errors: ""
+                    };
                     addLogEntry(`🚀 Starting research on: ${topic}`);
+                    document.getElementById('document-panel').style.display = 'block';
                 } else {
                     const error = await response.json();
                     alert(`Failed to start research: ${error.detail}`);
@@ -546,6 +699,100 @@
             }
         }
         
+        
+
+        
+        // Global document state management
+        let documentSections = {
+            header: "# Research Report\n\n",
+            intro: "",
+            literature: "",
+            analysis: "",
+            references: "",
+            errors: ""
+        };
+
+        function updateLiveDocument(newContent, section) {
+            const docElement = document.getElementById('live-document');
+            if (!docElement) return;
+            
+            // Determine how to handle the content based on section type
+            if (section && section.startsWith('search_')) {
+                // Search status - temporary, don't persist
+                displayTemporaryContent(newContent, docElement);
+            } else if (section && section.startsWith('summary_')) {
+                // Paper summary - append to literature section
+                documentSections.literature += newContent + "\n";
+                rebuildAndDisplayDocument(docElement);
+            } else if (section && section.startsWith('error_')) {
+                // Error - append to errors section
+                documentSections.errors += newContent + "\n";
+                rebuildAndDisplayDocument(docElement);
+            } else if (section === 'analysis') {
+                // Analysis section
+                documentSections.analysis = newContent;
+                rebuildAndDisplayDocument(docElement);
+            } else if (section === 'references') {
+                // References section
+                documentSections.references = newContent;
+                rebuildAndDisplayDocument(docElement);
+            } else {
+                // Default - show content temporarily
+                displayTemporaryContent(newContent, docElement);
+            }
+        }
+
+        function displayTemporaryContent(content, element) {
+            // Show temporary content (like search status) without affecting persistent sections
+            const persistentContent = buildFullDocument();
+            const tempContent = content + "\n\n---\n\n" + persistentContent;
+            element.innerHTML = formatMarkdownToHtml(tempContent);
+            element.scrollTop = element.scrollHeight;
+        }
+
+        function rebuildAndDisplayDocument(element) {
+            // Rebuild and display the full persistent document
+            const fullDocument = buildFullDocument();
+            element.innerHTML = formatMarkdownToHtml(fullDocument);
+            element.scrollTop = element.scrollHeight;
+        }
+
+        function buildFullDocument() {
+            // Build complete document from all sections
+            let document = documentSections.header;
+            
+            if (documentSections.literature) {
+                document += "## Literature Review\n\n" + documentSections.literature + "\n";
+            }
+            
+            if (documentSections.analysis) {
+                document += "## Analysis\n\n" + documentSections.analysis + "\n";
+            }
+            
+            if (documentSections.references) {
+                document += "## References\n\n" + documentSections.references + "\n";
+            }
+            
+            if (documentSections.errors) {
+                document += "## Errors\n\n" + documentSections.errors + "\n";
+            }
+            
+            return document;
+        }
+
+        function formatMarkdownToHtml(content) {
+            // Convert markdown-style formatting to HTML
+            return content
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/---/g, '<hr>')
+                .replace(/\n/g, '<br>');
+        }
+
+
         function researchComplete() {
             isResearching = false;
             updateButtons(false);
@@ -630,6 +877,52 @@
                 websocket.close();
             }
         });
+    
+        function toggleDocumentView() {
+            const panel = document.getElementById('document-panel');
+            const isVisible = panel.style.display !== 'none';
+            panel.style.display = isVisible ? 'none' : 'block';
+            
+            const toggleBtn = document.querySelector('.btn-toggle');
+            toggleBtn.textContent = isVisible ? 'Show Document' : 'Hide Document';
+        }
+
+        function submitFeedback() {
+            const feedback = document.getElementById('feedback-input').value.trim();
+            if (!feedback) {
+                alert('Please enter your feedback');
+                return;
+            }
+            
+            // Send feedback via WebSocket
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify({
+                    type: 'user_feedback',
+                    data: {
+                        feedback: feedback,
+                        session_id: currentSessionId
+                    }
+                }));
+                
+                document.getElementById('feedback-input').value = '';
+                document.getElementById('feedback-section').style.display = 'none';
+                addLogEntry(`💬 Feedback sent: ${feedback.substring(0, 50)}...`);
+            }
+        }
+
+        function continueWithoutFeedback() {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                websocket.send(JSON.stringify({
+                    type: 'continue_research',
+                    data: {
+                        session_id: currentSessionId
+                    }
+                }));
+                
+                document.getElementById('feedback-section').style.display = 'none';
+                addLogEntry('▶️ Continuing research without feedback');
+            }
+        }
     </script>
 </body>
 </html>

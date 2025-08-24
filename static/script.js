@@ -47,6 +47,26 @@ document.addEventListener("DOMContentLoaded", () => {
         logBox.scrollTop = logBox.scrollHeight; // Auto-scroll
     }
 
+
+    function updateLiveDocument(content, section) {
+        const docElement = document.getElementById('live-document');
+        if (docElement) {
+            docElement.innerHTML = marked ? marked(content) : content; // Use markdown if available
+            docElement.scrollTop = docElement.scrollHeight; // Auto-scroll
+        }
+    }
+
+    function showFeedbackInterface(message, currentDoc) {
+        const feedbackSection = document.getElementById('feedback-section');
+        if (feedbackSection) {
+            feedbackSection.style.display = 'block';
+            document.getElementById('feedback-prompt').textContent = message;
+        }
+    }
+
+    function updateResearchContext(context) {
+        document.getElementById('current-action').textContent = `Focus: ${context}`;
+    }
     function connectWebSocket() {
         const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/stream`);

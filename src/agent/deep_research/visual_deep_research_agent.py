@@ -485,6 +485,13 @@ Generate focused queries to fill knowledge gaps. Return JSON:
         Executes a full academic research task for a single query using a dedicated CustomAgent.
         The agent will navigate, find a relevant paper, read it, and summarize the content.
         """
+        await self._send_update("document_update", {
+            "content": f"🔍 **Currently Searching:** {query}\n\n*Finding relevant academic papers...*",
+            "section": f"search_{query}",
+            "word_count": 0
+        })
+        
+        
         try:
             # This is the new, clear, multi-step prompt that tells the agent WHAT to do.
             task_prompt = f"""
@@ -518,18 +525,41 @@ Generate focused queries to fill knowledge gaps. Return JSON:
             )
 
             # Give the agent enough steps to complete the entire search-click-read-summarize cycle.
-            result_history = await agent.run(max_steps=20) 
             
-            final_data = result_history.final_result()
-            logger.info(f"CustomAgent finished for query '{query}' with result.")
+            result_history = await agent.run(max_steps=20) 
+            final_data = result_history.final_result() or "The agent did not produce a final summary for this query."
 
-            return final_data if final_data else "The agent did not produce a final summary for this query."
+            # Send paper summary (persistent - appends to literature section)
+            await self._send_update("document_update", {
+                "content": f"### Paper Found: {query}\n\n{final_data}\n\n---\n",
+                "section": f"summary_{query}",
+                "word_count": len(final_data.split())
+            })
+            
+            logger.info(f"CustomAgent finished for query '{query}' with result.")
+            return final_data
 
         except Exception as e:
+            error_msg = f"**Search Error for '{query}':** {str(e)}"
+            
+            # Send error (persistent - appends to errors section)
+            await self._send_update("document_update", {
+                "content": f"❌ {error_msg}\n\n",
+                "section": f"error_{query}",
+                "word_count": 0
+            })
+            
             logger.error(f"The dedicated research agent failed for query '{query}': {e}", exc_info=True)
-            return f"An error occurred while researching '{query}': {str(e)}"
+            return error_msg
     
-
+    async def _send_agent_log(self, log_message: str, log_type: str = "info"):
+        """Send agent step logs to frontend"""
+        await self._send_update("agent_log", {
+            "message": log_message,
+            "type": log_type,
+            "timestamp": asyncio.get_event_loop().time()
+        })
+    
     async def _search_semantic_scholar(self, query: str, page) -> Optional[Dict]:
         """Search Semantic Scholar - Primary method (no captcha)"""
         try:
@@ -822,6 +852,13 @@ Generate focused queries to fill knowledge gaps. Return JSON:
         if not findings:
             return f"# Research Report: {topic}\n\nNo research findings were gathered during the process."
 
+        # Send initial document structure
+        await self._send_update("document_update", {
+            "content": f"# Research Report: {topic}\n\n*Generating report...*",
+            "section": "initialization",
+            "word_count": 0
+        })
+
         findings_text = ""
         citations = []
         
@@ -829,6 +866,13 @@ Generate focused queries to fill knowledge gaps. Return JSON:
         for i, finding in enumerate(findings):
             query = finding['query']
             result_content = finding['result']
+            
+            # Send progress update
+            await self._send_update("document_update", {
+                "content": f"# Research Report: {topic}\n\n*Processing finding {i+1}/{len(findings)}...*\n\n## Findings So Far:\n{findings_text}",
+                "section": "processing",
+                "word_count": len(findings_text.split())
+            })
             
             # Extract citations from the formatted result string
             if "**REFERENCES:**" in result_content:
@@ -844,13 +888,26 @@ Generate focused queries to fill knowledge gaps. Return JSON:
         # Create a unique, numbered list of citations
         unique_citations = sorted(list(set(c for c in citations if c.strip())))
         
+        # Send findings completion
+        await self._send_update("document_update", {
+            "content": f"# Research Report: {topic}\n\n*Synthesizing final report...*\n\n## Research Findings:\n{findings_text}",
+            "section": "findings_complete",
+            "word_count": len(findings_text.split())
+        })
+        
+        # Prepare the research plan context
+        plan_summary = "\nResearch Plan Followed:\n"
+        for item in self.research_plan if hasattr(self, 'research_plan') else []:
+            marker = "- [x]" if item.get('status') == 'completed' else "- [ ] (Failed)" if item.get('status') == 'failed' else "- [ ]"
+            plan_summary += f"{marker} {item['task']}\n"
+
         report_prompt = f"""
         **Task**: Generate a professional, well-structured academic research report on the topic: "{topic}".
 
         **Instructions**:
-        1.  Synthesize the provided research findings into a coherent report with an Introduction, Detailed Analysis, and Conclusion.
-        2.  Analyze the extracted content to build your report. Do not simply list the findings.
-        3.  **You must base your report *only* on the information provided below.**
+        1. Synthesize the provided research findings into a coherent report with an Introduction, Detailed Analysis, and Conclusion.
+        2. Analyze the extracted content to build your report. Do not simply list the findings.
+        3. **You must base your report *only* on the information provided below.**
 
         **Aggregated Research Findings**:
         {findings_text}
@@ -860,16 +917,31 @@ Generate focused queries to fill knowledge gaps. Return JSON:
             response = await self.llm.ainvoke([HumanMessage(content=report_prompt)])
             report_content = response.content
             
+            # Stream the final report as it's generated
+            await self._send_update("document_update", {
+                "content": report_content,
+                "section": "final_report",
+                "word_count": len(report_content.split()),
+                "status": "complete"
+            })
+            
             # Append the cleaned and numbered reference list
             if unique_citations:
                 report_content += "\n\n## References\n"
                 for i, citation in enumerate(unique_citations, 1):
-                    # Clean up any duplicate numbering from the source
                     if citation.startswith(f"[{i}]"):
                         report_content += f"{citation}\n"
                     else:
                         report_content += f"[{i}] {citation.lstrip('[]0123456789. ')}\n"
 
+            # Send final complete document
+            await self._send_update("document_update", {
+                "content": report_content,
+                "section": "complete",
+                "word_count": len(report_content.split()),
+                "status": "final"
+            })
+            
             # Save the final report
             report_path = os.path.join(session_dir, REPORT_FILENAME)
             with open(report_path, 'w', encoding='utf-8') as f:
@@ -880,7 +952,16 @@ Generate focused queries to fill knowledge gaps. Return JSON:
             
         except Exception as e:
             logger.error(f"Report generation failed: {e}", exc_info=True)
-            return f"# Report Generation Failed\n\nAn error occurred during the final synthesis: {str(e)}"
+            error_report = f"# Report Generation Failed\n\nAn error occurred during the final synthesis: {str(e)}"
+            
+            await self._send_update("document_update", {
+                "content": error_report,
+                "section": "error",
+                "word_count": len(error_report.split()),
+                "status": "error"
+            })
+            
+            return error_report
     
     async def _save_research_progress(self, session_dir: str, queries: List[str], findings: List[Dict]):
         """Save research progress to JSON file"""
