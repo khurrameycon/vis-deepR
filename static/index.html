@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Deep Research</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 0;
+            height: calc(100vh - 200px);
+        }
+        
+        .control-panel {
+            background: #f8f9fa;
+            padding: 30px;
+            border-right: 1px solid #e9ecef;
+        }
+        
+        .research-form {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            margin-bottom: 25px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #4facfe;
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+            width: 100%;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-stop {
+            background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+            margin-top: 10px;
+        }
+        
+        .status-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status-label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .status-value {
+            color: #666;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        
+        .browser-view {
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        
+        .browser-header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px 20px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .connection-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .connected {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .disconnected {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .browser-screen {
+            flex: 1;
+            background: #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .browser-screen img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+        
+        .placeholder {
+            color: #7f8c8d;
+            text-align: center;
+            font-size: 18px;
+        }
+        
+        .research-log {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .log-entry {
+            margin-bottom: 8px;
+            opacity: 0;
+            animation: fadeIn 0.5s ease forwards;
+        }
+        
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+        
+        .log-timestamp {
+            color: #95a5a6;
+            margin-right: 10px;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr;
+            }
+            
+            .control-panel {
+                border-right: none;
+                border-bottom: 1px solid #e9ecef;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔬 Visual Deep Research</h1>
+            <p>AI-Powered Research with Live Browser Streaming</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="control-panel">
+                <div class="research-form">
+                    <h3>Research Configuration</h3>
+                    
+                    <div class="form-group">
+                        <label for="research-topic">Research Topic</label>
+                        <textarea id="research-topic" placeholder="Enter your research topic here..." required></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="llm-provider">LLM Provider</label>
+                        <select id="llm-provider">
+                            <option value="google">Google Gemini</option>
+                            <option value="openai">OpenAI GPT</option>
+                            <option value="anthropic">Anthropic Claude</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="groq">Groq</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="api-key">API Key (optional)</label>
+                        <input type="password" id="api-key" placeholder="Leave blank to use environment variables">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="max-iterations">Max Research Iterations</label>
+                        <select id="max-iterations">
+                            <option value="3">3 iterations (Quick)</option>
+                            <option value="5" selected>5 iterations (Standard)</option>
+                            <option value="8">8 iterations (Thorough)</option>
+                            <option value="10">10 iterations (Comprehensive)</option>
+                        </select>
+                    </div>
+                    
+                    <button class="btn" id="start-research" onclick="startResearch()">
+                        🚀 Start Research
+                    </button>
+                    
+                    <button class="btn btn-stop" id="stop-research" onclick="stopResearch()" disabled>
+                        ⏹️ Stop Research
+                    </button>
+                </div>
+                
+                <div class="status-panel">
+                    <h3>Research Status</h3>
+                    
+                    <div class="status-item">
+                        <span class="status-label">Session ID:</span>
+                        <span class="status-value" id="session-id">Not connected</span>
+                    </div>
+                    
+                    <div class="status-item">
+                        <span class="status-label">Status:</span>
+                        <span class="status-value" id="research-status">Ready</span>
+                    </div>
+                    
+                    <div class="status-item">
+                        <span class="status-label">Progress:</span>
+                        <span class="status-value" id="research-progress">0%</span>
+                    </div>
+                    
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    
+                    <div class="status-item">
+                        <span class="status-label">Current Action:</span>
+                        <span class="status-value" id="current-action">Waiting to start...</span>
+                    </div>
+                    
+                    <div class="status-item">
+                        <span class="status-label">WebSocket:</span>
+                        <span class="status-value" id="ws-status">
+                            <span class="connection-status disconnected">Disconnected</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="browser-view">
+                <div class="browser-header">
+                    <span>Live Browser View</span>
+                    <span class="connection-status disconnected" id="browser-status">Not Connected</span>
+                </div>
+                
+                <div class="browser-screen" id="browser-screen">
+                    <div class="placeholder">
+                        🖥️ Browser view will appear here when research starts
+                    </div>
+                </div>
+                
+                <div class="research-log" id="research-log" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let websocket = null;
+        let isResearching = false;
+        
+        // Initialize session on page load
+        window.addEventListener('load', initializeSession);
+        
+        async function initializeSession() {
+            try {
+                const response = await fetch('/api/session/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                
+                const data = await response.json();
+                currentSessionId = data.session_id;
+                document.getElementById('session-id').textContent = data.session_id.substring(0, 8) + '...';
+                
+                connectWebSocket();
+            } catch (error) {
+                console.error('Failed to initialize session:', error);
+                updateStatus('error', 'Failed to initialize session');
+            }
+        }
+        
+        function connectWebSocket() {
+            if (!currentSessionId) return;
+            
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws/research/${currentSessionId}`;
+            
+            websocket = new WebSocket(wsUrl);
+            
+            websocket.onopen = function() {
+                updateWebSocketStatus(true);
+            };
+            
+            websocket.onclose = function() {
+                updateWebSocketStatus(false);
+                if (isResearching) {
+                    // Reconnect if research is still running
+                    setTimeout(connectWebSocket, 3000);
+                }
+            };
+            
+            websocket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                updateWebSocketStatus(false);
+            };
+            
+            websocket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+        }
+        
+       function handleWebSocketMessage(message) {
+            if (message.type === 'research_update') {
+                // The actual update type (e.g., 'screenshot', 'status') is inside message.data
+                handleResearchUpdate(message.data);
+            } else if (message.type === 'connected') {
+                addLogEntry('🔗 Connected to research session');
+            } else if (message.type === 'heartbeat') {
+                // This is expected, do nothing.
+            } else {
+                console.log('Received unhandled message type:', message.type);
+            }
+        }
+        
+        function handleResearchUpdate(updatePayload) { // Renamed for clarity
+            const updateType = updatePayload.type;
+
+            switch (updateType) {
+                case 'status':
+                    updateStatus('researching', updatePayload.message);
+                    updateProgress(updatePayload.progress);
+                    addLogEntry(`📊 ${updatePayload.message}`);
+                    break;
+                
+                case 'screenshot':
+                    
+                    updateBrowserView(updatePayload.image);
+                    break;
+                    
+                case 'complete':
+                    updateStatus('completed', updatePayload.message);
+                    updateProgress(100);
+                    addLogEntry(`✅ ${updatePayload.message}`);
+                    researchComplete();
+                    break;
+                    
+                case 'error':
+                    updateStatus('error', updatePayload.message);
+                    addLogEntry(`❌ ${updatePayload.message}`);
+                    researchComplete();
+                    break;
+
+                case 'plan':
+                    addLogEntry(`📋 ${updatePayload.message}`);
+                    break;
+
+                case 'search':
+                    // This line is now fixed and will no longer cause the error
+                    updateStatus('researching', `Searching: ${updatePayload.query}`);
+                    addLogEntry(`🔍 ${updatePayload.message}`);
+                    break;
+            }
+        }
+        
+        async function startResearch() {
+            const topic = document.getElementById('research-topic').value.trim();
+            if (!topic) {
+                alert('Please enter a research topic');
+                return;
+            }
+            
+            const requestData = {
+                session_id: currentSessionId,
+                topic: topic,
+                max_iterations: parseInt(document.getElementById('max-iterations').value),
+                llm_provider: document.getElementById('llm-provider').value,
+                llm_api_key: document.getElementById('api-key').value || null
+            };
+            
+            try {
+                const response = await fetch('/api/research/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(requestData)
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    isResearching = true;
+                    updateButtons(true);
+                    updateStatus('starting', 'Research starting...');
+                    clearLog();
+                    addLogEntry(`🚀 Starting research on: ${topic}`);
+                } else {
+                    const error = await response.json();
+                    alert(`Failed to start research: ${error.detail}`);
+                }
+            } catch (error) {
+                console.error('Error starting research:', error);
+                alert('Failed to start research. Please try again.');
+            }
+        }
+        
+        async function stopResearch() {
+            if (!currentSessionId) return;
+            
+            try {
+                const response = await fetch(`/api/research/stop/${currentSessionId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    addLogEntry('⏹️ Research stopped by user');
+                    researchComplete();
+                } else {
+                    console.error('Failed to stop research');
+                }
+            } catch (error) {
+                console.error('Error stopping research:', error);
+            }
+        }
+        
+        function researchComplete() {
+            isResearching = false;
+            updateButtons(false);
+            document.getElementById('browser-status').textContent = 'Research Complete';
+            document.getElementById('browser-status').className = 'connection-status connected';
+            
+            // Show download report button
+            setTimeout(() => {
+                if (confirm('Research completed! Would you like to download the report?')) {
+                    downloadReport();
+                }
+            }, 2000);
+        }
+        
+        function downloadReport() {
+            if (currentSessionId) {
+                window.open(`/api/research/report/${currentSessionId}`, '_blank');
+            }
+        }
+        
+        function updateButtons(researching) {
+            document.getElementById('start-research').disabled = researching;
+            document.getElementById('stop-research').disabled = !researching;
+            
+            // Disable form inputs during research
+            document.getElementById('research-topic').disabled = researching;
+            document.getElementById('llm-provider').disabled = researching;
+            document.getElementById('api-key').disabled = researching;
+            document.getElementById('max-iterations').disabled = researching;
+        }
+        
+        function updateStatus(status, message) {
+            document.getElementById('research-status').textContent = message;
+            document.getElementById('current-action').textContent = message;
+        }
+        
+        function updateProgress(percentage) {
+            document.getElementById('research-progress').textContent = `${percentage}%`;
+            document.getElementById('progress-fill').style.width = `${percentage}%`;
+        }
+        
+        function updateWebSocketStatus(connected) {
+            const statusElement = document.getElementById('ws-status').querySelector('.connection-status');
+            statusElement.textContent = connected ? 'Connected' : 'Disconnected';
+            statusElement.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+        }
+        
+        function updateBrowserView(imageBase64) {
+            const browserScreen = document.getElementById('browser-screen');
+            browserScreen.innerHTML = `<img src="data:image/jpeg;base64,${imageBase64}" alt="Browser Screenshot">`;
+            
+            document.getElementById('browser-status').textContent = 'Live Streaming';
+            document.getElementById('browser-status').className = 'connection-status connected';
+        }
+        
+        function addLogEntry(message) {
+            const logContainer = document.getElementById('research-log');
+            logContainer.style.display = 'block';
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `<span class="log-timestamp">[${timestamp}]</span>${message}`;
+            
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            
+            // Keep only last 20 entries
+            const entries = logContainer.querySelectorAll('.log-entry');
+            if (entries.length > 20) {
+                entries[0].remove();
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('research-log').innerHTML = '';
+        }
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (websocket) {
+                websocket.close();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,290 @@
+# version: '3.8'
+
+# Production Docker Compose for Multi-User Browser Use API
+services:
+  # Main API service
+  browser-use-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETPLATFORM: ${TARGETPLATFORM:-linux/amd64}
+        BUILD_DATE: ${BUILD_DATE:-}
+        VERSION: ${VERSION:-latest}
+        VCS_REF: ${VCS_REF:-}
+    image: crosswalk-agbpcta5h9a5ffag.azurecr.io/my1ai-visual-web-agent-api:latest
+    container_name: browser-use-api-prod
+    restart: unless-stopped
+
+    # Resource limits for production
+    deploy:
+      resources:
+        limits:
+          cpus: "3.5"
+          memory: 12G
+        reservations:
+          cpus: "2.0"
+          memory: 6G
+
+    # Security settings
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    cap_add:
+      - SYS_ADMIN
+    shm_size: "2gb"
+
+    # Network configuration
+    ports:
+      - "${API_PORT:-7788}:7788" # API endpoint
+      - "${VNC_WEB_PORT:-6080}:6080" # noVNC web interface
+      - "${VNC_PORT:-5901}:5901" # VNC direct connection
+      - "${DEBUG_PORT:-9222}:9222" # Chrome debugging (optional)
+
+    # Environment configuration
+    environment:
+      # Multi-user settings
+      - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-20}
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-45}
+      - MAX_STEPS_PER_TASK=${MAX_STEPS_PER_TASK:-100}
+
+      # Server configuration
+      - HOST=0.0.0.0
+      - PORT=7788
+      - PYTHONUNBUFFERED=1
+
+      # Browser configuration
+      - BROWSER_USE_LOGGING_LEVEL=${BROWSER_USE_LOGGING_LEVEL:-info}
+      - ANONYMIZED_TELEMETRY=${ANONYMIZED_TELEMETRY:-false}
+      - CHROME_PERSISTENT_SESSION=${CHROME_PERSISTENT_SESSION:-true}
+      - RESOLUTION=${RESOLUTION:-1920x1080x24}
+      - RESOLUTION_WIDTH=${RESOLUTION_WIDTH:-1920}
+      - RESOLUTION_HEIGHT=${RESOLUTION_HEIGHT:-1080}
+      - VNC_PASSWORD=${VNC_PASSWORD:-browseruse2024}
+
+      # Display configuration
+      - DISPLAY=:99
+      - CHROME_DEBUGGING_PORT=9222
+      - CHROME_DEBUGGING_HOST=localhost
+
+      # LLM API Keys (optional - can be passed per request)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - OLLAMA_ENDPOINT=${OLLAMA_ENDPOINT:-http://ollama:11434}
+
+      # Redis configuration (if using external session storage)
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+
+      # Monitoring
+      - ENABLE_METRICS=${ENABLE_METRICS:-true}
+
+    # Volume mounts for persistence
+    volumes:
+      - browser_data:/app/data
+      - downloads:/app/tmp/downloads
+      - traces:/app/tmp/traces
+      - recordings:/app/tmp/recordings
+      - logs:/app/logs
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - session_temp:/tmp
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Dependency order
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    # Networks
+    networks:
+      - browser-use-network
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # Redis for session management and caching
+  redis:
+    image: redis:7-alpine
+    container_name: browser-use-redis
+    restart: unless-stopped
+
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - browser-use-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Nginx reverse proxy with SSL
+  nginx:
+    image: nginx:alpine
+    container_name: browser-use-nginx
+    restart: unless-stopped
+
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - /etc/ssl/my1ai:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+
+    depends_on:
+      - browser-use-api
+
+    networks:
+      - browser-use-network
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # Optional: Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: browser-use-prometheus
+    restart: unless-stopped
+
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+
+    networks:
+      - browser-use-network
+
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: browser-use-grafana
+    restart: unless-stopped
+
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+
+    depends_on:
+      - prometheus
+
+    networks:
+      - browser-use-network
+
+    profiles:
+      - monitoring
+
+  # Optional: Ollama for local LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: browser-use-ollama
+    restart: unless-stopped
+
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+
+    networks:
+      - browser-use-network
+
+    profiles:
+      - local-llm
+
+    # GPU support (uncomment if you have GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+# Named volumes for data persistence
+volumes:
+  browser_data:
+    driver: local
+  downloads:
+    driver: local
+  traces:
+    driver: local
+  recordings:
+    driver: local
+  logs:
+    driver: local
+  redis_data:
+    driver: local
+  nginx_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  ollama_data:
+    driver: local
+  session_temp:
+    driver: local
+
+# Networks
+networks:
+  browser-use-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

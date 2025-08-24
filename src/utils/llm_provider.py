@@ -52,6 +52,71 @@ from pydantic import SecretStr
 from src.utils import config
 
 
+from groq import Groq
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from typing import Any, List, Optional
+
+class GroqChatWrapper(BaseChatModel):
+    """LangChain wrapper for Groq API"""
+    
+    def __init__(self, api_key: str, model: str = "meta-llama/llama-4-scout-17b-16e-instruct", temperature: float = 0.0, **kwargs):
+        super().__init__(**kwargs)
+        self.client = Groq(api_key=api_key)
+        self.model_name = model
+        self.temperature = temperature
+    
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ):
+        # Convert LangChain messages to Groq format
+        groq_messages = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                groq_messages.append({"role": "system", "content": message.content})
+            elif isinstance(message, HumanMessage):
+                groq_messages.append({"role": "user", "content": message.content})
+            elif isinstance(message, AIMessage):
+                groq_messages.append({"role": "assistant", "content": message.content})
+        
+        # Call Groq API
+        completion = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=groq_messages,
+            temperature=self.temperature,
+            max_tokens=kwargs.get("max_tokens", 1024),
+            stream=False,
+            stop=stop,
+        )
+        
+        # Convert response back to LangChain format
+        content = completion.choices[0].message.content
+        ai_message = AIMessage(content=content)
+        
+        from langchain_core.outputs import ChatGeneration, ChatResult
+        generation = ChatGeneration(message=ai_message)
+        return ChatResult(generations=[generation])
+    
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ):
+        # For async, we'll just call the sync version for now
+        # You could implement proper async if needed
+        return self._generate(messages, stop, run_manager, **kwargs)
+    
+    @property
+    def _llm_type(self) -> str:
+        return "groq"
+
 class DeepSeekR1ChatOpenAI(ChatOpenAI):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -205,18 +270,6 @@ def get_llm_model(provider: str, **kwargs):
             base_url=base_url,
             api_key=api_key,
         )
-    elif provider == "grok":
-        if not kwargs.get("base_url", ""):
-            base_url = os.getenv("GROK_ENDPOINT", "https://api.x.ai/v1")
-        else:
-            base_url = kwargs.get("base_url")
-
-        return ChatOpenAI(
-            model=kwargs.get("model_name", "grok-3"),
-            temperature=kwargs.get("temperature", 0.0),
-            base_url=base_url,
-            api_key=api_key,
-        )
     elif provider == "deepseek":
         if not kwargs.get("base_url", ""):
             base_url = os.getenv("DEEPSEEK_ENDPOINT", "")
@@ -237,6 +290,20 @@ def get_llm_model(provider: str, **kwargs):
                 base_url=base_url,
                 api_key=api_key,
             )
+    
+    elif provider == "groq":
+        if not kwargs.get("base_url", ""):
+            base_url = os.getenv("GROQ_ENDPOINT", "https://api.groq.com/openai/v1")
+        else:
+            base_url = kwargs.get("base_url")
+
+        return ChatGroq(
+            model=kwargs.get("model_name", "llama-3.1-70b-versatile"),
+            temperature=kwargs.get("temperature", 0.0),
+            base_url=base_url,
+            api_key=api_key,
+        )
+
     elif provider == "google":
         return ChatGoogleGenerativeAI(
             model=kwargs.get("model_name", "gemini-2.0-flash-exp"),
@@ -334,22 +401,6 @@ def get_llm_model(provider: str, **kwargs):
             base_url=base_url,
             model_name=kwargs.get("model_name", "Qwen/QwQ-32B"),
             temperature=kwargs.get("temperature", 0.0),
-        )
-    elif provider == "modelscope":
-        if not kwargs.get("api_key", ""):
-            api_key = os.getenv("MODELSCOPE_API_KEY", "")
-        else:
-            api_key = kwargs.get("api_key")
-        if not kwargs.get("base_url", ""):
-            base_url = os.getenv("MODELSCOPE_ENDPOINT", "")
-        else:
-            base_url = kwargs.get("base_url")
-        return ChatOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            model_name=kwargs.get("model_name", "Qwen/QwQ-32B"),
-            temperature=kwargs.get("temperature", 0.0),
-            extra_body = {"enable_thinking": False}
         )
     else:
         raise ValueError(f"Unsupported provider: {provider}")

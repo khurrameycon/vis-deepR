@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Research Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .control-panel { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .browser-view { border: 1px solid #ccc; height: 500px; background: #000; display: flex; align-items: center; justify-content: center; }
+        .browser-view img { max-width: 100%; max-height: 100%; }
+        .status { margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        input, textarea { width: 100%; padding: 8px; margin: 5px 0; }
+        .log { height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Visual Research Test</h1>
+        
+        <div class="control-panel">
+            <h3>Research Configuration</h3>
+            <textarea id="topic" placeholder="Enter research topic..." rows="3">AI applications in healthcare diagnostics</textarea>
+            <select id="provider">
+                <option value="google">Google Gemini</option>
+                <option value="openai">OpenAI GPT</option>
+                <option value="anthropic">Anthropic Claude</option>
+            </select>
+            <input type="password" id="apiKey" placeholder="API Key (optional)">
+            <br>
+            <button onclick="startResearch()">🚀 Start Research</button>
+            <button onclick="stopResearch()">⏹️ Stop Research</button>
+            <button onclick="createSession()">🔄 New Session</button>
+        </div>
+        
+        <div class="status" id="status">Ready - Click "New Session" first</div>
+        
+        <div class="browser-view" id="browserView">
+            <div style="color: white;">Browser view will appear here during research</div>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let sessionId = null;
+        let websocket = null;
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        async function createSession() {
+            try {
+                const response = await fetch('/api/session/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                sessionId = data.session_id;
+                document.getElementById('status').textContent = `Session: ${sessionId.substring(0, 8)}...`;
+                log(`Session created: ${sessionId}`);
+                connectWebSocket();
+            } catch (error) {
+                log(`Error creating session: ${error}`);
+            }
+        }
+        
+        function connectWebSocket() {
+            if (!sessionId) return;
+            
+            if (websocket) {
+                websocket.close();
+            }
+            
+            const wsUrl = `ws://localhost:7788/ws/research/${sessionId}`;
+            log(`Connecting to WebSocket: ${wsUrl}`);
+            
+            websocket = new WebSocket(wsUrl);
+            
+            websocket.onopen = function() {
+                log('WebSocket connected ✅');
+                document.getElementById('status').textContent += ' - WebSocket Connected';
+            };
+            
+            websocket.onclose = function(event) {
+                log(`WebSocket closed: ${event.code} - ${event.reason}`);
+            };
+            
+            websocket.onerror = function(error) {
+                log(`WebSocket error: ${error}`);
+            };
+            
+            websocket.onmessage = function(event) {
+                try {
+                    const message = JSON.parse(event.data);
+                    handleWebSocketMessage(message);
+                } catch (error) {
+                    log(`Error parsing WebSocket message: ${error}`);
+                }
+            };
+        }
+        
+        function handleWebSocketMessage(message) {
+            console.log('WebSocket message:', message);
+            
+            switch (message.type) {
+                case 'connected':
+                    log(`Connected: ${message.data.message}`);
+                    break;
+                    
+                case 'research_update':
+                    handleResearchUpdate(message);
+                    break;
+                    
+                case 'screenshot':
+                    updateBrowserView(message.data.image);
+                    break;
+                    
+                case 'heartbeat':
+                    // Keep alive
+                    break;
+                    
+                default:
+                    log(`Unknown message type: ${message.type}`);
+            }
+        }
+        
+        function handleResearchUpdate(message) {
+            const data = message.data || {};
+            
+            switch (data.type) {
+                case 'status':
+                    log(`Status: ${data.message}`);
+                    document.getElementById('status').textContent = `Progress: ${data.progress || 0}% - ${data.message}`;
+                    break;
+                    
+                case 'search':
+                    log(`Searching: ${data.query}`);
+                    break;
+                    
+                case 'screenshot':
+                    updateBrowserView(data.image);
+                    break;
+                    
+                case 'complete':
+                    log(`Research complete: ${data.message}`);
+                    document.getElementById('status').textContent = 'Research Complete ✅';
+                    break;
+                    
+                case 'error':
+                    log(`Error: ${data.message}`);
+                    document.getElementById('status').textContent = `Error: ${data.message}`;
+                    break;
+                    
+                default:
+                    log(`Research update: ${JSON.stringify(data)}`);
+            }
+        }
+        
+        function updateBrowserView(imageBase64) {
+            const browserView = document.getElementById('browserView');
+            browserView.innerHTML = `<img src="data:image/jpeg;base64,${imageBase64}" alt="Browser Screenshot">`;
+            log('Browser screenshot updated 📸');
+        }
+        
+        async function startResearch() {
+            if (!sessionId) {
+                alert('Please create a session first');
+                return;
+            }
+            
+            const topic = document.getElementById('topic').value.trim();
+            if (!topic) {
+                alert('Please enter a research topic');
+                return;
+            }
+            
+            const data = {
+                session_id: sessionId,
+                topic: topic,
+                llm_provider: document.getElementById('provider').value,
+                llm_api_key: document.getElementById('apiKey').value || null,
+                max_iterations: 3
+            };
+            
+            try {
+                log(`Starting research: ${topic}`);
+                const response = await fetch('/api/research/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    log(`Research started: ${result.message}`);
+                    document.getElementById('status').textContent = 'Research Starting...';
+                } else {
+                    const error = await response.json();
+                    log(`Error starting research: ${error.detail}`);
+                }
+            } catch (error) {
+                log(`Error: ${error}`);
+            }
+        }
+        
+        async function stopResearch() {
+            if (!sessionId) return;
+            
+            try {
+                const response = await fetch(`/api/research/stop/${sessionId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    log('Research stopped');
+                    document.getElementById('status').textContent = 'Research Stopped';
+                }
+            } catch (error) {
+                log(`Error stopping research: ${error}`);
+            }
+        }
+        
+        // Auto-create session on load
+        window.onload = createSession;
+    </script>
+</body>
+</html>

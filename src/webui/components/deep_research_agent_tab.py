@@ -74,13 +74,7 @@ async def run_deep_research(webui_manager: WebuiManager, components: Dict[Compon
     task_topic = components.get(research_task_comp, "").strip()
     task_id_to_resume = components.get(resume_task_id_comp, "").strip() or None
     max_parallel_agents = int(components.get(parallel_num_comp, 1))
-    base_save_dir = components.get(save_dir_comp, "./tmp/deep_research").strip()
-    safe_root_dir = "./tmp/deep_research"
-    normalized_base_save_dir = os.path.abspath(os.path.normpath(base_save_dir))
-    if os.path.commonpath([normalized_base_save_dir, os.path.abspath(safe_root_dir)]) != os.path.abspath(safe_root_dir):
-        logger.warning(f"Unsafe base_save_dir detected: {base_save_dir}. Using default directory.")
-        normalized_base_save_dir = os.path.abspath(safe_root_dir)
-    base_save_dir = normalized_base_save_dir
+    base_save_dir = components.get(save_dir_comp, "./tmp/deep_research")
     mcp_server_config_str = components.get(mcp_server_config_comp)
     mcp_config = json.loads(mcp_server_config_str) if mcp_server_config_str else None
 
@@ -122,7 +116,7 @@ async def run_deep_research(webui_manager: WebuiManager, components: Dict[Compon
         # LLM Config (from agent_settings tab)
         llm_provider_name = get_setting("agent_settings", "llm_provider")
         llm_model_name = get_setting("agent_settings", "llm_model_name")
-        llm_temperature = max(get_setting("agent_settings", "llm_temperature", 0.5), 0.5)
+        llm_temperature = get_setting("agent_settings", "llm_temperature", 0.5)  # Default if not found
         llm_base_url = get_setting("agent_settings", "llm_base_url")
         llm_api_key = get_setting("agent_settings", "llm_api_key")
         ollama_num_ctx = get_setting("agent_settings", "ollama_num_ctx")
@@ -138,7 +132,7 @@ async def run_deep_research(webui_manager: WebuiManager, components: Dict[Compon
         # Note: DeepResearchAgent constructor takes a dict, not full Browser/Context objects
         browser_config_dict = {
             "headless": get_setting("browser_settings", "headless", False),
-            "disable_security": get_setting("browser_settings", "disable_security", False),
+            "disable_security": get_setting("browser_settings", "disable_security", True),
             "browser_binary_path": get_setting("browser_settings", "browser_binary_path"),
             "user_data_dir": get_setting("browser_settings", "browser_user_data_dir"),
             "window_width": int(get_setting("browser_settings", "window_w", 1280)),

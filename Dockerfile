@@ -1,10 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
-# Set platform for multi-arch builds (Docker Buildx will set this)
-ARG TARGETPLATFORM
-ARG NODE_MAJOR=20
+# Set build arguments
+ARG TARGETPLATFORM=linux/amd64
+ARG BUILD_DATE
+ARG VERSION
+ARG VCS_REF
 
-# Install system dependencies
+# Add metadata
+LABEL org.label-schema.build-date=$BUILD_DATE \
+      org.label-schema.name="browser-use-multi-user" \
+      org.label-schema.description="Multi-user Browser Use API with session management" \
+      org.label-schema.version=$VERSION \
+      org.label-schema.vcs-ref=$VCS_REF \
+      org.label-schema.vcs-url="https://github.com/browser-use/web-ui" \
+      org.label-schema.schema-version="1.0"
+
+# Install system dependencies with proper cleanup
 RUN apt-get update && apt-get install -y \
     wget \
     netcat-traditional \
@@ -43,57 +54,94 @@ RUN apt-get update && apt-get install -y \
     fonts-dejavu \
     fonts-dejavu-core \
     fonts-dejavu-extra \
-    vim \
-    && rm -rf /var/lib/apt/lists/*
+    # Health check and monitoring tools
+    htop \
+    iotop \
+    jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Install noVNC
+# Install noVNC for browser viewing
 RUN git clone https://github.com/novnc/noVNC.git /opt/novnc \
     && git clone https://github.com/novnc/websockify /opt/novnc/utils/websockify \
     && ln -s /opt/novnc/vnc.html /opt/novnc/index.html
 
-# Install Node.js using NodeSource PPA
-RUN mkdir -p /etc/apt/keyrings \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install nodejs -y \
-    && rm -rf /var/lib/apt/lists/*
-
-# Verify Node.js and npm installation (optional, but good for debugging)
-RUN node -v && npm -v && npx -v
+# Create non-root user for security
+RUN groupadd -r browseruse && useradd -r -g browseruse -s /bin/bash browseruse \
+    && mkdir -p /home/browseruse \
+    && chown -R browseruse:browseruse /home/browseruse
 
 # Set up working directory
 WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install playwright browsers and dependencies
-# playwright documentation suggests PLAYWRIGHT_BROWSERS_PATH is still relevant
-# or that playwright installs to a similar default location that Playwright would.
-# Let's assume playwright respects PLAYWRIGHT_BROWSERS_PATH or its default install location is findable.
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-browsers
-RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
-
-# Install recommended: Google Chrome (instead of just Chromium for better undetectability)
-# The 'playwright install chrome' command might download and place it.
-# The '--with-deps' equivalent for playwright install is to run 'playwright install-deps chrome' after.
-# RUN playwright install chrome --with-deps
-
-# Alternative: Install Chromium if Google Chrome is problematic in certain environments
-RUN playwright install chromium --with-deps
-
+# Install Playwright and browsers with system dependencies
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install --with-deps chromium \
+    && playwright install-deps
 
 # Copy the application code
 COPY . .
 
-# Set up supervisor configuration
-RUN mkdir -p /var/log/supervisor
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/data/chrome_data \
+    /app/tmp/downloads \
+    /app/tmp/traces \
+    /app/tmp/recordings \
+    /app/tmp/sessions \
+    /app/logs \
+    /var/log/supervisor \
+    && chown -R browseruse:browseruse /app \
+    && chown -R browseruse:browseruse /var/log/supervisor
 
+# Set environment variables for production
+ENV PYTHONUNBUFFERED=1 \
+    BROWSER_USE_LOGGING_LEVEL=info \
+    CHROME_PATH=/ms-playwright/chromium-*/chrome-linux/chrome \
+    ANONYMIZED_TELEMETRY=false \
+    DISPLAY=:99 \
+    RESOLUTION=1920x1080x24 \
+    VNC_PASSWORD=vncpassword \
+    CHROME_PERSISTENT_SESSION=true \
+    RESOLUTION_WIDTH=1920 \
+    RESOLUTION_HEIGHT=1080 \
+    # Multi-user configuration
+    MAX_CONCURRENT_SESSIONS=20 \
+    SESSION_TIMEOUT_MINUTES=45 \
+    MAX_STEPS_PER_TASK=100 \
+    # Server configuration
+    HOST=0.0.0.0 \
+    PORT=7788 \
+    # Resource limits
+    CHROME_DEBUGGING_PORT=9222 \
+    CHROME_DEBUGGING_HOST=localhost
+
+# Copy production supervisor configuration
+COPY docker/supervisord.prod.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Copy health check script
+COPY docker/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Expose ports
 EXPOSE 7788 6080 5901 9222
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
-#CMD ["/bin/bash"]
+# Add health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD /usr/local/bin/healthcheck.sh
+
+# Switch to non-root user
+USER browseruse
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+CMD ["supervisord"]

@@ -1,0 +1,41 @@
+body {
+    background-color: #f8f9fa;
+}
+
+#stream-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9; /* Maintain a 16:9 aspect ratio */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+}
+
+#stream-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+#stream-placeholder {
+    position: absolute;
+}
+
+#log-box {
+    height: 300px;
+    overflow-y: auto;
+    background-color: #e9ecef;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+    color: #333;
+}
+
+#final-result-box {
+    min-height: 100px;
+    background-color: #e9ecef;
+}
+
+.spinner-border {
+    vertical-align: middle;
+}

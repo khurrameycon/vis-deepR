@@ -1,0 +1,246 @@
+#!/bin/bash
+# comprehensive_curl_examples.sh
+# Complete examples for using the Multi-User Browser Use API with different LLM providers
+
+BASE_URL="http://localhost:7788"
+
+echo "🚀 Multi-User Browser Use API - Curl Examples"
+echo "=============================================="
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}📋 Step 1: Health Check${NC}"
+curl -X GET $BASE_URL/health | jq
+
+echo -e "\n${BLUE}📋 Step 2: Get Available Providers${NC}"
+curl -X GET $BASE_URL/api/providers | jq
+
+echo -e "\n${BLUE}📋 Step 3: Create Session${NC}"
+SESSION_RESPONSE=$(curl -s -X POST $BASE_URL/api/session/create)
+SESSION_ID=$(echo $SESSION_RESPONSE | jq -r '.session_id')
+echo "Session created: $SESSION_ID"
+
+echo -e "\n${BLUE}📋 Step 4: Get Session Info${NC}"
+curl -X GET $BASE_URL/api/session/$SESSION_ID | jq
+
+echo -e "\n${GREEN}🤖 LLM Provider Examples${NC}"
+echo "=========================================="
+
+echo -e "\n${YELLOW}Example 1: OpenAI GPT-4${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Go to google.com and search for latest AI developments",
+    "llm_provider": "openai",
+    "llm_model_name": "gpt-4o",
+    "llm_api_key": "sk-your-openai-api-key-here",
+    "llm_temperature": 0.7,
+    "llm_base_url": "https://api.openai.com/v1"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 2: Google Gemini${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Navigate to wikipedia.org and search for quantum computing",
+    "llm_provider": "google",
+    "llm_model_name": "gemini-2.0-flash",
+    "llm_api_key": "your-google-gemini-api-key",
+    "llm_temperature": 0.6
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 3: Anthropic Claude${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Go to github.com and find the most popular Python web frameworks",
+    "llm_provider": "anthropic",
+    "llm_model_name": "claude-3-5-sonnet-20241022",
+    "llm_api_key": "sk-ant-your-anthropic-api-key",
+    "llm_temperature": 0.5,
+    "llm_base_url": "https://api.anthropic.com"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 4: DeepSeek${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Search for the latest machine learning research papers",
+    "llm_provider": "deepseek",
+    "llm_model_name": "deepseek-chat",
+    "llm_api_key": "your-deepseek-api-key",
+    "llm_temperature": 0.8,
+    "llm_base_url": "https://api.deepseek.com"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 5: DeepSeek R1 (Reasoning Model)${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Analyze the top 3 programming languages and their use cases",
+    "llm_provider": "deepseek",
+    "llm_model_name": "deepseek-reasoner",
+    "llm_api_key": "your-deepseek-api-key",
+    "llm_temperature": 0.6,
+    "llm_base_url": "https://api.deepseek.com"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 6: Groq (Fast Inference)${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Quick search for today's tech news headlines",
+    "llm_provider": "groq",
+    "llm_model_name": "llama-3.1-70b-versatile",
+    "llm_api_key": "your-groq-api-key",
+    "llm_temperature": 0.7,
+    "llm_base_url": "https://api.groq.com/openai/v1"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 7: Local Ollama${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Browse local documentation and summarize key points",
+    "llm_provider": "ollama",
+    "llm_model_name": "qwen2.5:14b",
+    "llm_temperature": 0.6,
+    "llm_base_url": "http://localhost:11434"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 8: Azure OpenAI${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Research enterprise AI solutions",
+    "llm_provider": "azure_openai",
+    "llm_model_name": "gpt-4o",
+    "llm_api_key": "your-azure-openai-key",
+    "llm_temperature": 0.5,
+    "llm_base_url": "https://your-resource.openai.azure.com"
+  }'
+EOF
+
+echo -e "\n${YELLOW}Example 9: Mistral AI${NC}"
+cat << 'EOF'
+curl -X POST http://localhost:7788/api/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "task": "Find and compare European AI startups",
+    "llm_provider": "mistral",
+    "llm_model_name": "mistral-large-latest",
+    "llm_api_key": "your-mistral-api-key",
+    "llm_temperature": 0.7,
+    "llm_base_url": "https://api.mistral.ai/v1"
+  }'
+EOF
+
+echo -e "\n${GREEN}🎛️ Control Commands${NC}"
+echo "=================="
+
+echo -e "\n${BLUE}Stop Agent:${NC}"
+echo "curl -X POST $BASE_URL/api/agent/stop/$SESSION_ID"
+
+echo -e "\n${BLUE}Get Session Status:${NC}"
+echo "curl -X GET $BASE_URL/api/session/$SESSION_ID | jq"
+
+echo -e "\n${BLUE}Delete Session:${NC}"
+echo "curl -X DELETE $BASE_URL/api/session/$SESSION_ID"
+
+echo -e "\n${GREEN}🔌 WebSocket Connection${NC}"
+echo "======================"
+echo "Connect to WebSocket for real-time streaming:"
+echo "ws://localhost:7788/ws/stream/$SESSION_ID"
+echo ""
+echo "You can use tools like wscat to test:"
+echo "npm install -g wscat"
+echo "wscat -c ws://localhost:7788/ws/stream/$SESSION_ID"
+
+echo -e "\n${GREEN}🔧 Environment Variables Alternative${NC}"
+echo "===================================="
+echo "Instead of passing API keys in requests, you can set environment variables:"
+echo ""
+echo "# OpenAI"
+echo "export OPENAI_API_KEY='sk-your-openai-key'"
+echo ""
+echo "# Google"
+echo "export GOOGLE_API_KEY='your-google-key'"
+echo ""
+echo "# Anthropic"
+echo "export ANTHROPIC_API_KEY='sk-ant-your-key'"
+echo ""
+echo "# DeepSeek"
+echo "export DEEPSEEK_API_KEY='your-deepseek-key'"
+echo ""
+echo "# Groq"
+echo "export GROQ_API_KEY='your-groq-key'"
+echo ""
+echo "Then you can omit the 'llm_api_key' field from your requests."
+
+echo -e "\n${GREEN}📊 Complete Workflow Example${NC}"
+echo "============================"
+echo "Here's a complete workflow using actual curl commands:"
+
+echo -e "\n${BLUE}# 1. Create session${NC}"
+echo "SESSION_ID=\$(curl -s -X POST $BASE_URL/api/session/create | jq -r '.session_id')"
+echo "echo \"Session ID: \$SESSION_ID\""
+
+echo -e "\n${BLUE}# 2. Start agent with OpenAI${NC}"
+echo 'curl -X POST $BASE_URL/api/agent/run \'
+echo '  -H "Content-Type: application/json" \'
+echo '  -d "{'
+echo '    \"session_id\": \"$SESSION_ID\",'
+echo '    \"task\": \"Go to google.com and search for AI news\",'
+echo '    \"llm_provider\": \"openai\",'
+echo '    \"llm_model_name\": \"gpt-4o\",'
+echo '    \"llm_api_key\": \"your-api-key-here\"'
+echo '  }"'
+
+echo -e "\n${BLUE}# 3. Monitor via WebSocket (in another terminal)${NC}"
+echo "wscat -c ws://localhost:7788/ws/stream/\$SESSION_ID"
+
+echo -e "\n${BLUE}# 4. Check session status${NC}"
+echo "curl -X GET \$BASE_URL/api/session/\$SESSION_ID | jq"
+
+echo -e "\n${BLUE}# 5. Stop agent if needed${NC}"
+echo "curl -X POST \$BASE_URL/api/agent/stop/\$SESSION_ID"
+
+echo -e "\n${BLUE}# 6. Clean up${NC}"
+echo "curl -X DELETE \$BASE_URL/api/session/\$SESSION_ID"
+
+echo -e "\n${GREEN}✅ Ready to use!${NC}"
+echo "Replace 'your-api-key-here' with your actual API keys and start automating!"
+
+# Cleanup the demo session
+echo -e "\n${RED}🧹 Cleaning up demo session...${NC}"
+curl -s -X DELETE $BASE_URL/api/session/$SESSION_ID > /dev/null
+echo "Demo session cleaned up."

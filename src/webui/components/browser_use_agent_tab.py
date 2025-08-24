@@ -1,52 +1,61 @@
-import asyncio
-import json
-import logging
-import os
-import uuid
-from typing import Any, AsyncGenerator, Dict, Optional
+import pdb
 
 import gradio as gr
-
+from gradio.components import Component
+import asyncio
+import os
+import json
+import uuid
+import logging
+from datetime import datetime
+from typing import List, Dict, Optional, Any, Set, Generator, AsyncGenerator, Union
+from collections.abc import Awaitable
+from langchain_core.language_models.chat_models import BaseChatModel
+import base64
+from browser_use.browser.browser import Browser, BrowserConfig
+from browser_use.browser.context import BrowserContext, BrowserContextConfig, BrowserContextWindowSize
 # from browser_use.agent.service import Agent
+from browser_use.agent.views import AgentHistoryList
+from browser_use.agent.views import ToolCallingMethod  # Adjust import
 from browser_use.agent.views import (
+    REQUIRED_LLM_API_ENV_VARS,
+    ActionResult,
+    AgentError,
+    AgentHistory,
     AgentHistoryList,
     AgentOutput,
+    AgentSettings,
+    AgentState,
+    AgentStepInfo,
+    StepMetadata,
+    ToolCallingMethod,
 )
-from browser_use.browser.browser import BrowserConfig
-from browser_use.browser.context import BrowserContext, BrowserContextConfig
-from browser_use.browser.views import BrowserState
-from gradio.components import Component
-from langchain_core.language_models.chat_models import BaseChatModel
+from browser_use.browser.browser import Browser
+from browser_use.browser.context import BrowserContext
+from browser_use.browser.views import BrowserState, BrowserStateHistory
 
-from src.agent.browser_use.browser_use_agent import BrowserUseAgent
-from src.browser.custom_browser import CustomBrowser
+from src.webui.webui_manager import WebuiManager
 from src.controller.custom_controller import CustomController
 from src.utils import llm_provider
-from src.webui.webui_manager import WebuiManager
+from src.browser.custom_browser import CustomBrowser
+from src.browser.custom_context import CustomBrowserContext, CustomBrowserContextConfig
+from src.agent.browser_use.browser_use_agent import BrowserUseAgent
 
 logger = logging.getLogger(__name__)
 
 
 # --- Helper Functions --- (Defined at module level)
 
-
-async def _initialize_llm(
-        provider: Optional[str],
-        model_name: Optional[str],
-        temperature: float,
-        base_url: Optional[str],
-        api_key: Optional[str],
-        num_ctx: Optional[int] = None,
-) -> Optional[BaseChatModel]:
+async def _initialize_llm(provider: Optional[str], model_name: Optional[str], temperature: float,
+                          base_url: Optional[str], api_key: Optional[str], num_ctx: Optional[int] = None) -> Optional[
+    BaseChatModel]:
     """Initializes the LLM based on settings. Returns None if provider/model is missing."""
     if not provider or not model_name:
         logger.info("LLM Provider or Model Name not specified, LLM will be None.")
         return None
     try:
         # Use your actual LLM provider logic here
-        logger.info(
-            f"Initializing LLM: Provider={provider}, Model={model_name}, Temp={temperature}"
-        )
+        logger.info(f"Initializing LLM: Provider={provider}, Model={model_name}, Temp={temperature}")
         # Example using a placeholder function
         llm = llm_provider.get_llm_model(
             provider=provider,
@@ -55,23 +64,18 @@ async def _initialize_llm(
             base_url=base_url or None,
             api_key=api_key or None,
             # Add other relevant params like num_ctx for ollama
-            num_ctx=num_ctx if provider == "ollama" else None,
+            num_ctx=num_ctx if provider == "ollama" else None
         )
         return llm
     except Exception as e:
         logger.error(f"Failed to initialize LLM: {e}", exc_info=True)
         gr.Warning(
-            f"Failed to initialize LLM '{model_name}' for provider '{provider}'. Please check settings. Error: {e}"
-        )
+            f"Failed to initialize LLM '{model_name}' for provider '{provider}'. Please check settings. Error: {e}")
         return None
 
 
-def _get_config_value(
-        webui_manager: WebuiManager,
-        comp_dict: Dict[gr.components.Component, Any],
-        comp_id_suffix: str,
-        default: Any = None,
-) -> Any:
+def _get_config_value(webui_manager: WebuiManager, comp_dict: Dict[gr.components.Component, Any], comp_id_suffix: str,
+                      default: Any = None) -> Any:
     """Safely get value from component dictionary using its ID suffix relative to the tab."""
     # Assumes component ID format is "tab_name.comp_name"
     tab_name = "browser_use_agent"  # Hardcode or derive if needed
@@ -89,9 +93,7 @@ def _get_config_value(
                 return comp_dict.get(comp, default)
             except KeyError:
                 continue
-        logger.warning(
-            f"Component with suffix '{comp_id_suffix}' not found in manager for value lookup."
-        )
+        logger.warning(f"Component with suffix '{comp_id_suffix}' not found in manager for value lookup.")
         return default
 
 
@@ -101,14 +103,12 @@ def _format_agent_output(model_output: AgentOutput) -> str:
     if model_output:
         try:
             # Directly use model_dump if actions and current_state are Pydantic models
-            action_dump = [
-                action.model_dump(exclude_none=True) for action in model_output.action
-            ]
+            action_dump = [action.model_dump(exclude_none=True) for action in model_output.action]
 
             state_dump = model_output.current_state.model_dump(exclude_none=True)
             model_output_dump = {
-                "current_state": state_dump,
-                "action": action_dump,
+                'current_state': state_dump,
+                'action': action_dump,
             }
             # Dump to JSON string with indentation
             json_string = json.dumps(model_output_dump, indent=4, ensure_ascii=False)
@@ -117,8 +117,7 @@ def _format_agent_output(model_output: AgentOutput) -> str:
 
         except AttributeError as ae:
             logger.error(
-                f"AttributeError during model dump: {ae}. Check if 'action' or 'current_state' or their items support 'model_dump'."
-            )
+                f"AttributeError during model dump: {ae}. Check if 'action' or 'current_state' or their items support 'model_dump'.")
             content = f"<pre><code>Error: Could not format agent output (AttributeError: {ae}).\nRaw output: {str(model_output)}</code></pre>"
         except Exception as e:
             logger.error(f"Error formatting agent output: {e}", exc_info=True)
@@ -130,17 +129,12 @@ def _format_agent_output(model_output: AgentOutput) -> str:
 
 # --- Updated Callback Implementation ---
 
-
-async def _handle_new_step(
-        webui_manager: WebuiManager, state: BrowserState, output: AgentOutput, step_num: int
-):
+async def _handle_new_step(webui_manager: WebuiManager, state: BrowserState, output: AgentOutput, step_num: int):
     """Callback for each step taken by the agent, including screenshot display."""
 
     # Use the correct chat history attribute name from the user's code
-    if not hasattr(webui_manager, "bu_chat_history"):
-        logger.error(
-            "Attribute 'bu_chat_history' not found in webui_manager! Cannot add chat message."
-        )
+    if not hasattr(webui_manager, 'bu_chat_history'):
+        logger.error("Attribute 'bu_chat_history' not found in webui_manager! Cannot add chat message.")
         # Initialize it maybe? Or raise an error? For now, log and potentially skip chat update.
         webui_manager.bu_chat_history = []  # Initialize if missing (consider if this is the right place)
         # return # Or stop if this is critical
@@ -151,29 +145,21 @@ async def _handle_new_step(
     screenshot_html = ""
     # Ensure state.screenshot exists and is not empty before proceeding
     # Use getattr for safer access
-    screenshot_data = getattr(state, "screenshot", None)
+    screenshot_data = getattr(state, 'screenshot', None)
     if screenshot_data:
         try:
             # Basic validation: check if it looks like base64
-            if (
-                    isinstance(screenshot_data, str) and len(screenshot_data) > 100
-            ):  # Arbitrary length check
+            if isinstance(screenshot_data, str) and len(screenshot_data) > 100:  # Arbitrary length check
                 # *** UPDATED STYLE: Removed centering, adjusted width ***
                 img_tag = f'<img src="data:image/jpeg;base64,{screenshot_data}" alt="Step {step_num} Screenshot" style="max-width: 800px; max-height: 600px; object-fit:contain;" />'
-                screenshot_html = (
-                        img_tag + "<br/>"
-                )  # Use <br/> for line break after inline-block image
+                screenshot_html = img_tag + "<br/>"  # Use <br/> for line break after inline-block image
             else:
                 logger.warning(
-                    f"Screenshot for step {step_num} seems invalid (type: {type(screenshot_data)}, len: {len(screenshot_data) if isinstance(screenshot_data, str) else 'N/A'})."
-                )
+                    f"Screenshot for step {step_num} seems invalid (type: {type(screenshot_data)}, len: {len(screenshot_data) if isinstance(screenshot_data, str) else 'N/A'}).")
                 screenshot_html = "**[Invalid screenshot data]**<br/>"
 
         except Exception as e:
-            logger.error(
-                f"Error processing or formatting screenshot for step {step_num}: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error processing or formatting screenshot for step {step_num}: {e}", exc_info=True)
             screenshot_html = "**[Error displaying screenshot]**<br/>"
     else:
         logger.debug(f"No screenshot available for step {step_num}.")
@@ -188,7 +174,7 @@ async def _handle_new_step(
 
     chat_message = {
         "role": "assistant",
-        "content": final_content.strip(),  # Remove leading/trailing whitespace
+        "content": final_content.strip()  # Remove leading/trailing whitespace
     }
 
     # Append to the correct chat history list
@@ -200,9 +186,8 @@ async def _handle_new_step(
 def _handle_done(webui_manager: WebuiManager, history: AgentHistoryList):
     """Callback when the agent finishes the task (success or failure)."""
     logger.info(
-        f"Agent task finished. Duration: {history.total_duration_seconds():.2f}s, Tokens: {history.total_input_tokens()}"
-    )
-    final_summary = "**Task Completed**\n"
+        f"Agent task finished. Duration: {history.total_duration_seconds():.2f}s, Tokens: {history.total_input_tokens()}")
+    final_summary = f"**Task Completed**\n"
     final_summary += f"- Duration: {history.total_duration_seconds():.2f} seconds\n"
     final_summary += f"- Total Input Tokens: {history.total_input_tokens()}\n"  # Or total tokens if available
 
@@ -216,27 +201,20 @@ def _handle_done(webui_manager: WebuiManager, history: AgentHistoryList):
     else:
         final_summary += "- Status: Success\n"
 
-    webui_manager.bu_chat_history.append(
-        {"role": "assistant", "content": final_summary}
-    )
+    webui_manager.bu_chat_history.append({"role": "assistant", "content": final_summary})
 
 
-async def _ask_assistant_callback(
-        webui_manager: WebuiManager, query: str, browser_context: BrowserContext
-) -> Dict[str, Any]:
+async def _ask_assistant_callback(webui_manager: WebuiManager, query: str, browser_context: BrowserContext) -> Dict[
+    str, Any]:
     """Callback triggered by the agent's ask_for_assistant action."""
     logger.info("Agent requires assistance. Waiting for user input.")
 
-    if not hasattr(webui_manager, "_chat_history"):
+    if not hasattr(webui_manager, '_chat_history'):
         logger.error("Chat history not found in webui_manager during ask_assistant!")
         return {"response": "Internal Error: Cannot display help request."}
 
-    webui_manager.bu_chat_history.append(
-        {
-            "role": "assistant",
-            "content": f"**Need Help:** {query}\nPlease provide information or perform the required action in the browser, then type your response/confirmation below and click 'Submit Response'.",
-        }
-    )
+    webui_manager.bu_chat_history.append({"role": "assistant",
+                                          "content": f"**Need Help:** {query}\nPlease provide information or perform the required action in the browser, then type your response/confirmation below and click 'Submit Response'."})
 
     # Use state stored in webui_manager
     webui_manager.bu_response_event = asyncio.Event()
@@ -244,60 +222,38 @@ async def _ask_assistant_callback(
 
     try:
         logger.info("Waiting for user response event...")
-        await asyncio.wait_for(
-            webui_manager.bu_response_event.wait(), timeout=3600.0
-        )  # Long timeout
+        await asyncio.wait_for(webui_manager.bu_response_event.wait(), timeout=3600.0)  # Long timeout
         logger.info("User response event received.")
     except asyncio.TimeoutError:
         logger.warning("Timeout waiting for user assistance.")
         webui_manager.bu_chat_history.append(
-            {
-                "role": "assistant",
-                "content": "**Timeout:** No response received. Trying to proceed.",
-            }
-        )
+            {"role": "assistant", "content": "**Timeout:** No response received. Trying to proceed."})
         webui_manager.bu_response_event = None  # Clear the event
         return {"response": "Timeout: User did not respond."}  # Inform the agent
 
     response = webui_manager.bu_user_help_response
-    webui_manager.bu_chat_history.append(
-        {"role": "user", "content": response}
-    )  # Show user response in chat
-    webui_manager.bu_response_event = (
-        None  # Clear the event for the next potential request
-    )
+    webui_manager.bu_chat_history.append({"role": "user", "content": response})  # Show user response in chat
+    webui_manager.bu_response_event = None  # Clear the event for the next potential request
     return {"response": response}
 
 
 # --- Core Agent Execution Logic --- (Needs access to webui_manager)
 
-
-async def run_agent_task(
-        webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]
-) -> AsyncGenerator[Dict[gr.components.Component, Any], None]:
+async def run_agent_task(webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]) -> AsyncGenerator[
+    Dict[gr.components.Component, Any], None]:
     """Handles the entire lifecycle of initializing and running the agent."""
 
     # --- Get Components ---
     # Need handles to specific UI components to update them
     user_input_comp = webui_manager.get_component_by_id("browser_use_agent.user_input")
     run_button_comp = webui_manager.get_component_by_id("browser_use_agent.run_button")
-    stop_button_comp = webui_manager.get_component_by_id(
-        "browser_use_agent.stop_button"
-    )
-    pause_resume_button_comp = webui_manager.get_component_by_id(
-        "browser_use_agent.pause_resume_button"
-    )
-    clear_button_comp = webui_manager.get_component_by_id(
-        "browser_use_agent.clear_button"
-    )
+    stop_button_comp = webui_manager.get_component_by_id("browser_use_agent.stop_button")
+    pause_resume_button_comp = webui_manager.get_component_by_id("browser_use_agent.pause_resume_button")
+    clear_button_comp = webui_manager.get_component_by_id("browser_use_agent.clear_button")
     chatbot_comp = webui_manager.get_component_by_id("browser_use_agent.chatbot")
-    history_file_comp = webui_manager.get_component_by_id(
-        "browser_use_agent.agent_history_file"
-    )
+    history_file_comp = webui_manager.get_component_by_id("browser_use_agent.agent_history_file")
     gif_comp = webui_manager.get_component_by_id("browser_use_agent.recording_gif")
-    browser_view_comp = webui_manager.get_component_by_id(
-        "browser_use_agent.browser_view"
-    )
+    browser_view_comp = webui_manager.get_component_by_id("browser_use_agent.browser_view")
 
     # --- 1. Get Task and Initial UI Update ---
     task = components.get(user_input_comp, "").strip()
@@ -310,9 +266,7 @@ async def run_agent_task(
     webui_manager.bu_chat_history.append({"role": "user", "content": task})
 
     yield {
-        user_input_comp: gr.Textbox(
-            value="", interactive=False, placeholder="Agent is running..."
-        ),
+        user_input_comp: gr.Textbox(value="", interactive=False, placeholder="Agent is running..."),
         run_button_comp: gr.Button(value="⏳ Running...", interactive=False),
         stop_button_comp: gr.Button(interactive=True),
         pause_resume_button_comp: gr.Button(value="⏸️ Pause", interactive=True),
@@ -330,9 +284,7 @@ async def run_agent_task(
 
     override_system_prompt = get_setting("override_system_prompt") or None
     extend_system_prompt = get_setting("extend_system_prompt") or None
-    llm_provider_name = get_setting(
-        "llm_provider", None
-    )  # Default to None if not found
+    llm_provider_name = get_setting("llm_provider", None)  # Default to None if not found
     llm_model_name = get_setting("llm_model_name", None)
     llm_temperature = get_setting("llm_temperature", 0.6)
     use_vision = get_setting("use_vision", True)
@@ -344,20 +296,13 @@ async def run_agent_task(
     max_input_tokens = get_setting("max_input_tokens", 128000)
     tool_calling_str = get_setting("tool_calling_method", "auto")
     tool_calling_method = tool_calling_str if tool_calling_str != "None" else None
-    mcp_server_config_comp = webui_manager.id_to_component.get(
-        "agent_settings.mcp_server_config"
-    )
-    mcp_server_config_str = (
-        components.get(mcp_server_config_comp) if mcp_server_config_comp else None
-    )
-    mcp_server_config = (
-        json.loads(mcp_server_config_str) if mcp_server_config_str else None
-    )
+    mcp_server_config_comp = webui_manager.id_to_component.get("agent_settings.mcp_server_config")
+    mcp_server_config_str = components.get(mcp_server_config_comp) if mcp_server_config_comp else None
+    mcp_server_config = json.loads(mcp_server_config_str) if mcp_server_config_str else None
 
     # Planner LLM Settings (Optional)
     planner_llm_provider_name = get_setting("planner_llm_provider") or None
     planner_llm = None
-    planner_use_vision = False
     if planner_llm_provider_name:
         planner_llm_model_name = get_setting("planner_llm_model_name")
         planner_llm_temperature = get_setting("planner_llm_temperature", 0.6)
@@ -367,12 +312,9 @@ async def run_agent_task(
         planner_use_vision = get_setting("planner_use_vision", False)
 
         planner_llm = await _initialize_llm(
-            planner_llm_provider_name,
-            planner_llm_model_name,
-            planner_llm_temperature,
-            planner_llm_base_url,
-            planner_llm_api_key,
-            planner_ollama_num_ctx if planner_llm_provider_name == "ollama" else None,
+            planner_llm_provider_name, planner_llm_model_name, planner_llm_temperature,
+            planner_llm_base_url, planner_llm_api_key,
+            planner_ollama_num_ctx if planner_llm_provider_name == "ollama" else None
         )
 
     # --- Browser Settings ---
@@ -382,54 +324,39 @@ async def run_agent_task(
 
     browser_binary_path = get_browser_setting("browser_binary_path") or None
     browser_user_data_dir = get_browser_setting("browser_user_data_dir") or None
-    use_own_browser = get_browser_setting(
-        "use_own_browser", False
-    )  # Logic handled by CDP/WSS presence
+    use_own_browser = get_browser_setting("use_own_browser", False)  # Logic handled by CDP/WSS presence
     keep_browser_open = get_browser_setting("keep_browser_open", False)
     headless = get_browser_setting("headless", False)
-    disable_security = get_browser_setting("disable_security", False)
+    disable_security = get_browser_setting("disable_security", True)
     window_w = int(get_browser_setting("window_w", 1280))
     window_h = int(get_browser_setting("window_h", 1100))
     cdp_url = get_browser_setting("cdp_url") or None
     wss_url = get_browser_setting("wss_url") or None
     save_recording_path = get_browser_setting("save_recording_path") or None
     save_trace_path = get_browser_setting("save_trace_path") or None
-    save_agent_history_path = get_browser_setting(
-        "save_agent_history_path", "./tmp/agent_history"
-    )
+    save_agent_history_path = get_browser_setting("save_agent_history_path", "./tmp/agent_history")
     save_download_path = get_browser_setting("save_download_path", "./tmp/downloads")
 
     stream_vw = 70
     stream_vh = int(70 * window_h // window_w)
 
     os.makedirs(save_agent_history_path, exist_ok=True)
-    if save_recording_path:
-        os.makedirs(save_recording_path, exist_ok=True)
-    if save_trace_path:
-        os.makedirs(save_trace_path, exist_ok=True)
-    if save_download_path:
-        os.makedirs(save_download_path, exist_ok=True)
+    if save_recording_path: os.makedirs(save_recording_path, exist_ok=True)
+    if save_trace_path: os.makedirs(save_trace_path, exist_ok=True)
+    if save_download_path: os.makedirs(save_download_path, exist_ok=True)
 
     # --- 2. Initialize LLM ---
     main_llm = await _initialize_llm(
-        llm_provider_name,
-        llm_model_name,
-        llm_temperature,
-        llm_base_url,
-        llm_api_key,
-        ollama_num_ctx if llm_provider_name == "ollama" else None,
+        llm_provider_name, llm_model_name, llm_temperature, llm_base_url, llm_api_key,
+        ollama_num_ctx if llm_provider_name == "ollama" else None
     )
 
     # Pass the webui_manager instance to the callback when wrapping it
-    async def ask_callback_wrapper(
-            query: str, browser_context: BrowserContext
-    ) -> Dict[str, Any]:
+    async def ask_callback_wrapper(query: str, browser_context: BrowserContext) -> Dict[str, Any]:
         return await _ask_assistant_callback(webui_manager, query, browser_context)
 
     if not webui_manager.bu_controller:
-        webui_manager.bu_controller = CustomController(
-            ask_assistant_callback=ask_callback_wrapper
-        )
+        webui_manager.bu_controller = CustomController(ask_assistant_callback=ask_callback_wrapper)
         await webui_manager.bu_controller.setup_mcp_client(mcp_server_config)
 
     # --- 4. Initialize Browser and Context ---
@@ -450,17 +377,19 @@ async def run_agent_task(
         # Create Browser if needed
         if not webui_manager.bu_browser:
             logger.info("Launching new browser instance.")
-            extra_args = []
+            extra_args = [f"--window-size={window_w},{window_h}"]
+            if browser_user_data_dir:
+                extra_args.append(f"--user-data-dir={browser_user_data_dir}")
+
             if use_own_browser:
-                browser_binary_path = os.getenv("BROWSER_PATH", None) or browser_binary_path
+                browser_binary_path = os.getenv("CHROME_PATH", None) or browser_binary_path
                 if browser_binary_path == "":
                     browser_binary_path = None
-                browser_user_data = browser_user_data_dir or os.getenv("BROWSER_USER_DATA", None)
-                if browser_user_data:
-                    extra_args += [f"--user-data-dir={browser_user_data}"]
+                chrome_user_data = os.getenv("CHROME_USER_DATA", None)
+                if chrome_user_data:
+                    extra_args += [f"--user-data-dir={chrome_user_data}"]
             else:
                 browser_binary_path = None
-
             webui_manager.bu_browser = CustomBrowser(
                 config=BrowserConfig(
                     headless=headless,
@@ -469,52 +398,32 @@ async def run_agent_task(
                     extra_browser_args=extra_args,
                     wss_url=wss_url,
                     cdp_url=cdp_url,
-                    new_context_config=BrowserContextConfig(
-                        window_width=window_w,
-                        window_height=window_h,
-                    )
                 )
             )
 
         # Create Context if needed
         if not webui_manager.bu_browser_context:
             logger.info("Creating new browser context.")
-            context_config = BrowserContextConfig(
+            context_config = CustomBrowserContextConfig(
                 trace_path=save_trace_path if save_trace_path else None,
-                save_recording_path=save_recording_path
-                if save_recording_path
-                else None,
+                save_recording_path=save_recording_path if save_recording_path else None,
                 save_downloads_path=save_download_path if save_download_path else None,
-                window_height=window_h,
-                window_width=window_w,
+                browser_window_size=BrowserContextWindowSize(width=window_w, height=window_h)
             )
             if not webui_manager.bu_browser:
                 raise ValueError("Browser not initialized, cannot create context.")
-            webui_manager.bu_browser_context = (
-                await webui_manager.bu_browser.new_context(config=context_config)
-            )
+            webui_manager.bu_browser_context = await webui_manager.bu_browser.new_context(config=context_config)
 
         # --- 5. Initialize or Update Agent ---
         webui_manager.bu_agent_task_id = str(uuid.uuid4())  # New ID for this task run
-        os.makedirs(
-            os.path.join(save_agent_history_path, webui_manager.bu_agent_task_id),
-            exist_ok=True,
-        )
-        history_file = os.path.join(
-            save_agent_history_path,
-            webui_manager.bu_agent_task_id,
-            f"{webui_manager.bu_agent_task_id}.json",
-        )
-        gif_path = os.path.join(
-            save_agent_history_path,
-            webui_manager.bu_agent_task_id,
-            f"{webui_manager.bu_agent_task_id}.gif",
-        )
+        os.makedirs(os.path.join(save_agent_history_path, webui_manager.bu_agent_task_id), exist_ok=True)
+        history_file = os.path.join(save_agent_history_path, webui_manager.bu_agent_task_id,
+                                    f"{webui_manager.bu_agent_task_id}.json")
+        gif_path = os.path.join(save_agent_history_path, webui_manager.bu_agent_task_id,
+                                f"{webui_manager.bu_agent_task_id}.gif")
 
         # Pass the webui_manager to callbacks when wrapping them
-        async def step_callback_wrapper(
-                state: BrowserState, output: AgentOutput, step_num: int
-        ):
+        async def step_callback_wrapper(state: BrowserState, output: AgentOutput, step_num: int):
             await _handle_new_step(webui_manager, state, output, step_num)
 
         def done_callback_wrapper(history: AgentHistoryList):
@@ -523,9 +432,7 @@ async def run_agent_task(
         if not webui_manager.bu_agent:
             logger.info(f"Initializing new agent for task: {task}")
             if not webui_manager.bu_browser or not webui_manager.bu_browser_context:
-                raise ValueError(
-                    "Browser or Context not initialized, cannot create agent."
-                )
+                raise ValueError("Browser or Context not initialized, cannot create agent.")
             webui_manager.bu_agent = BrowserUseAgent(
                 task=task,
                 llm=main_llm,
@@ -541,8 +448,7 @@ async def run_agent_task(
                 max_actions_per_step=max_actions,
                 tool_calling_method=tool_calling_method,
                 planner_llm=planner_llm,
-                use_vision_for_planner=planner_use_vision if planner_llm else False,
-                source="webui",
+                use_vision_for_planner=planner_use_vision if planner_llm else False
             )
             webui_manager.bu_agent.state.agent_id = webui_manager.bu_agent_task_id
             webui_manager.bu_agent.settings.generate_gif = gif_path
@@ -567,9 +473,7 @@ async def run_agent_task(
             # Check for pause state
             if is_paused:
                 yield {
-                    pause_resume_button_comp: gr.update(
-                        value="▶️ Resume", interactive=True
-                    ),
+                    pause_resume_button_comp: gr.update(value="▶️ Resume", interactive=True),
                     stop_button_comp: gr.update(interactive=True),
                 }
                 # Wait until pause is released or task is stopped/done
@@ -581,19 +485,13 @@ async def run_agent_task(
                         break
                     await asyncio.sleep(0.2)
 
-                if (
-                        agent_task.done() or is_stopped
-                ):  # If stopped or task finished while paused
+                if agent_task.done() or is_stopped:  # If stopped or task finished while paused
                     break
 
                 # If resumed, yield UI update
                 yield {
-                    pause_resume_button_comp: gr.update(
-                        value="⏸️ Pause", interactive=True
-                    ),
-                    run_button_comp: gr.update(
-                        value="⏳ Running...", interactive=False
-                    ),
+                    pause_resume_button_comp: gr.update(value="⏸️ Pause", interactive=True),
+                    run_button_comp: gr.update(value="⏳ Running...", interactive=False),
                 }
 
             # Check if agent stopped itself or stop button was pressed (which sets agent.state.stopped)
@@ -602,13 +500,9 @@ async def run_agent_task(
                 if not agent_task.done():
                     # Ensure the task coroutine finishes if agent just set flag
                     try:
-                        await asyncio.wait_for(
-                            agent_task, timeout=1.0
-                        )  # Give it a moment to exit run()
+                        await asyncio.wait_for(agent_task, timeout=1.0)  # Give it a moment to exit run()
                     except asyncio.TimeoutError:
-                        logger.warning(
-                            "Agent task did not finish quickly after stop signal, cancelling."
-                        )
+                        logger.warning("Agent task did not finish quickly after stop signal, cancelling.")
                         agent_task.cancel()
                     except Exception:  # Catch task exceptions if it errors on stop
                         pass
@@ -618,31 +512,23 @@ async def run_agent_task(
             update_dict = {}
             if webui_manager.bu_response_event is not None:
                 update_dict = {
-                    user_input_comp: gr.update(
-                        placeholder="Agent needs help. Enter response and submit.",
-                        interactive=True,
-                    ),
-                    run_button_comp: gr.update(
-                        value="✔️ Submit Response", interactive=True
-                    ),
+                    user_input_comp: gr.update(placeholder="Agent needs help. Enter response and submit.",
+                                               interactive=True),
+                    run_button_comp: gr.update(value="✔️ Submit Response", interactive=True),
                     pause_resume_button_comp: gr.update(interactive=False),
                     stop_button_comp: gr.update(interactive=False),
-                    chatbot_comp: gr.update(value=webui_manager.bu_chat_history),
+                    chatbot_comp: gr.update(value=webui_manager.bu_chat_history)
                 }
                 last_chat_len = len(webui_manager.bu_chat_history)
                 yield update_dict
                 # Wait until response is submitted or task finishes
-                await webui_manager.bu_response_event.wait()
-
+                while webui_manager.bu_response_event is not None and not agent_task.done():
+                    await asyncio.sleep(0.2)
                 # Restore UI after response submitted or if task ended unexpectedly
                 if not agent_task.done():
                     yield {
-                        user_input_comp: gr.update(
-                            placeholder="Agent is running...", interactive=False
-                        ),
-                        run_button_comp: gr.update(
-                            value="⏳ Running...", interactive=False
-                        ),
+                        user_input_comp: gr.update(placeholder="Agent is running...", interactive=False),
+                        run_button_comp: gr.update(value="⏳ Running...", interactive=False),
                         pause_resume_button_comp: gr.update(interactive=True),
                         stop_button_comp: gr.update(interactive=True),
                     }
@@ -651,33 +537,24 @@ async def run_agent_task(
 
             # Update Chatbot if new messages arrived via callbacks
             if len(webui_manager.bu_chat_history) > last_chat_len:
-                update_dict[chatbot_comp] = gr.update(
-                    value=webui_manager.bu_chat_history
-                )
+                update_dict[chatbot_comp] = gr.update(value=webui_manager.bu_chat_history)
                 last_chat_len = len(webui_manager.bu_chat_history)
 
             # Update Browser View
             if headless and webui_manager.bu_browser_context:
                 try:
-                    screenshot_b64 = (
-                        await webui_manager.bu_browser_context.take_screenshot()
-                    )
+                    screenshot_b64 = await webui_manager.bu_browser_context.take_screenshot()
                     if screenshot_b64:
                         html_content = f'<img src="data:image/jpeg;base64,{screenshot_b64}" style="width:{stream_vw}vw; height:{stream_vh}vh ; border:1px solid #ccc;">'
-                        update_dict[browser_view_comp] = gr.update(
-                            value=html_content, visible=True
-                        )
+                        update_dict[browser_view_comp] = gr.update(value=html_content, visible=True)
                     else:
                         html_content = f"<h1 style='width:{stream_vw}vw; height:{stream_vh}vh'>Waiting for browser session...</h1>"
-                        update_dict[browser_view_comp] = gr.update(
-                            value=html_content, visible=True
-                        )
+                        update_dict[browser_view_comp] = gr.update(value=html_content,
+                                                                   visible=True)
                 except Exception as e:
                     logger.debug(f"Failed to capture screenshot: {e}")
-                    update_dict[browser_view_comp] = gr.update(
-                        value="<div style='...'>Error loading view...</div>",
-                        visible=True,
-                    )
+                    update_dict[browser_view_comp] = gr.update(value="<div style='...'>Error loading view...</div>",
+                                                               visible=True)
             else:
                 update_dict[browser_view_comp] = gr.update(visible=False)
 
@@ -712,28 +589,16 @@ async def run_agent_task(
 
         except asyncio.CancelledError:
             logger.info("Agent task was cancelled.")
-            if not any(
-                    "Cancelled" in msg.get("content", "")
-                    for msg in webui_manager.bu_chat_history
-                    if msg.get("role") == "assistant"
-            ):
-                webui_manager.bu_chat_history.append(
-                    {"role": "assistant", "content": "**Task Cancelled**."}
-                )
+            if not any("Cancelled" in msg.get("content", "") for msg in webui_manager.bu_chat_history if
+                       msg.get("role") == "assistant"):
+                webui_manager.bu_chat_history.append({"role": "assistant", "content": "**Task Cancelled**."})
             final_update[chatbot_comp] = gr.update(value=webui_manager.bu_chat_history)
         except Exception as e:
             logger.error(f"Error during agent execution: {e}", exc_info=True)
-            error_message = (
-                f"**Agent Execution Error:**\n```\n{type(e).__name__}: {e}\n```"
-            )
-            if not any(
-                    error_message in msg.get("content", "")
-                    for msg in webui_manager.bu_chat_history
-                    if msg.get("role") == "assistant"
-            ):
-                webui_manager.bu_chat_history.append(
-                    {"role": "assistant", "content": error_message}
-                )
+            error_message = f"**Agent Execution Error:**\n```\n{type(e).__name__}: {e}\n```"
+            if not any(error_message in msg.get("content", "") for msg in webui_manager.bu_chat_history if
+                       msg.get("role") == "assistant"):
+                webui_manager.bu_chat_history.append({"role": "assistant", "content": error_message})
             final_update[chatbot_comp] = gr.update(value=webui_manager.bu_chat_history)
             gr.Error(f"Agent execution failed: {e}")
 
@@ -752,23 +617,15 @@ async def run_agent_task(
                     webui_manager.bu_browser = None
 
             # --- 8. Final UI Update ---
-            final_update.update(
-                {
-                    user_input_comp: gr.update(
-                        value="",
-                        interactive=True,
-                        placeholder="Enter your next task...",
-                    ),
-                    run_button_comp: gr.update(value="▶️ Submit Task", interactive=True),
-                    stop_button_comp: gr.update(value="⏹️ Stop", interactive=False),
-                    pause_resume_button_comp: gr.update(
-                        value="⏸️ Pause", interactive=False
-                    ),
-                    clear_button_comp: gr.update(interactive=True),
-                    # Ensure final chat history is shown
-                    chatbot_comp: gr.update(value=webui_manager.bu_chat_history),
-                }
-            )
+            final_update.update({
+                user_input_comp: gr.update(value="", interactive=True, placeholder="Enter your next task..."),
+                run_button_comp: gr.update(value="▶️ Submit Task", interactive=True),
+                stop_button_comp: gr.update(value="⏹️ Stop", interactive=False),
+                pause_resume_button_comp: gr.update(value="⏸️ Pause", interactive=False),
+                clear_button_comp: gr.update(interactive=True),
+                # Ensure final chat history is shown
+                chatbot_comp: gr.update(value=webui_manager.bu_chat_history)
+            })
             yield final_update
 
     except Exception as e:
@@ -776,26 +633,19 @@ async def run_agent_task(
         logger.error(f"Error setting up agent task: {e}", exc_info=True)
         webui_manager.bu_current_task = None  # Ensure state is reset
         yield {
-            user_input_comp: gr.update(
-                interactive=True, placeholder="Error during setup. Enter task..."
-            ),
+            user_input_comp: gr.update(interactive=True, placeholder="Error during setup. Enter task..."),
             run_button_comp: gr.update(value="▶️ Submit Task", interactive=True),
             stop_button_comp: gr.update(value="⏹️ Stop", interactive=False),
             pause_resume_button_comp: gr.update(value="⏸️ Pause", interactive=False),
             clear_button_comp: gr.update(interactive=True),
             chatbot_comp: gr.update(
-                value=webui_manager.bu_chat_history
-                      + [{"role": "assistant", "content": f"**Setup Error:** {e}"}]
-            ),
+                value=webui_manager.bu_chat_history + [{"role": "assistant", "content": f"**Setup Error:** {e}"}]),
         }
 
 
 # --- Button Click Handlers --- (Need access to webui_manager)
 
-
-async def handle_submit(
-        webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]
-):
+async def handle_submit(webui_manager: WebuiManager, components: Dict[gr.components.Component, Any]):
     """Handles clicks on the main 'Submit' button."""
     user_input_comp = webui_manager.get_component_by_id("browser_use_agent.user_input")
     user_input_value = components.get(user_input_comp, "").strip()
@@ -803,26 +653,17 @@ async def handle_submit(
     # Check if waiting for user assistance
     if webui_manager.bu_response_event and not webui_manager.bu_response_event.is_set():
         logger.info(f"User submitted assistance: {user_input_value}")
-        webui_manager.bu_user_help_response = (
-            user_input_value if user_input_value else "User provided no text response."
-        )
+        webui_manager.bu_user_help_response = user_input_value if user_input_value else "User provided no text response."
         webui_manager.bu_response_event.set()
         # UI updates handled by the main loop reacting to the event being set
         yield {
-            user_input_comp: gr.update(
-                value="",
-                interactive=False,
-                placeholder="Waiting for agent to continue...",
-            ),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.run_button"
-            ): gr.update(value="⏳ Running...", interactive=False),
+            user_input_comp: gr.update(value="", interactive=False, placeholder="Waiting for agent to continue..."),
+            webui_manager.get_component_by_id("browser_use_agent.run_button"): gr.update(value="⏳ Running...",
+                                                                                         interactive=False)
         }
     # Check if a task is currently running (using _current_task)
     elif webui_manager.bu_current_task and not webui_manager.bu_current_task.done():
-        logger.warning(
-            "Submit button clicked while agent is already running and not asking for help."
-        )
+        logger.warning("Submit button clicked while agent is already running and not asking for help.")
         gr.Info("Agent is currently running. Please wait or use Stop/Pause.")
         yield {}  # No change
     else:
@@ -844,32 +685,19 @@ async def handle_stop(webui_manager: WebuiManager):
         agent.state.stopped = True
         agent.state.paused = False  # Ensure not paused if stopped
         return {
-            webui_manager.get_component_by_id(
-                "browser_use_agent.stop_button"
-            ): gr.update(interactive=False, value="⏹️ Stopping..."),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.pause_resume_button"
-            ): gr.update(interactive=False),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.run_button"
-            ): gr.update(interactive=False),
+            webui_manager.get_component_by_id("browser_use_agent.stop_button"): gr.update(interactive=False,
+                                                                                          value="⏹️ Stopping..."),
+            webui_manager.get_component_by_id("browser_use_agent.pause_resume_button"): gr.update(interactive=False),
+            webui_manager.get_component_by_id("browser_use_agent.run_button"): gr.update(interactive=False),
         }
     else:
         logger.warning("Stop clicked but agent is not running or task is already done.")
         # Reset UI just in case it's stuck
         return {
-            webui_manager.get_component_by_id(
-                "browser_use_agent.run_button"
-            ): gr.update(interactive=True),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.stop_button"
-            ): gr.update(interactive=False),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.pause_resume_button"
-            ): gr.update(interactive=False),
-            webui_manager.get_component_by_id(
-                "browser_use_agent.clear_button"
-            ): gr.update(interactive=True),
+            webui_manager.get_component_by_id("browser_use_agent.run_button"): gr.update(interactive=True),
+            webui_manager.get_component_by_id("browser_use_agent.stop_button"): gr.update(interactive=False),
+            webui_manager.get_component_by_id("browser_use_agent.pause_resume_button"): gr.update(interactive=False),
+            webui_manager.get_component_by_id("browser_use_agent.clear_button"): gr.update(interactive=True),
         }
 
 
@@ -884,22 +712,16 @@ async def handle_pause_resume(webui_manager: WebuiManager):
             agent.resume()
             # UI update happens in main loop
             return {
-                webui_manager.get_component_by_id(
-                    "browser_use_agent.pause_resume_button"
-                ): gr.update(value="⏸️ Pause", interactive=True)
-            }  # Optimistic update
+                webui_manager.get_component_by_id("browser_use_agent.pause_resume_button"): gr.update(value="⏸️ Pause",
+                                                                                                      interactive=True)}  # Optimistic update
         else:
             logger.info("Pause button clicked.")
             agent.pause()
             return {
-                webui_manager.get_component_by_id(
-                    "browser_use_agent.pause_resume_button"
-                ): gr.update(value="▶️ Resume", interactive=True)
-            }  # Optimistic update
+                webui_manager.get_component_by_id("browser_use_agent.pause_resume_button"): gr.update(value="▶️ Resume",
+                                                                                                      interactive=True)}  # Optimistic update
     else:
-        logger.warning(
-            "Pause/Resume clicked but agent is not running or doesn't support state."
-        )
+        logger.warning("Pause/Resume clicked but agent is not running or doesn't support state.")
         return {}  # No change
 
 
@@ -936,38 +758,23 @@ async def handle_clear(webui_manager: WebuiManager):
 
     # Reset UI components
     return {
-        webui_manager.get_component_by_id("browser_use_agent.chatbot"): gr.update(
-            value=[]
-        ),
-        webui_manager.get_component_by_id("browser_use_agent.user_input"): gr.update(
-            value="", placeholder="Enter your task here..."
-        ),
-        webui_manager.get_component_by_id(
-            "browser_use_agent.agent_history_file"
-        ): gr.update(value=None),
-        webui_manager.get_component_by_id("browser_use_agent.recording_gif"): gr.update(
-            value=None
-        ),
+        webui_manager.get_component_by_id("browser_use_agent.chatbot"): gr.update(value=[]),
+        webui_manager.get_component_by_id("browser_use_agent.user_input"): gr.update(value="",
+                                                                                     placeholder="Enter your task here..."),
+        webui_manager.get_component_by_id("browser_use_agent.agent_history_file"): gr.update(value=None),
+        webui_manager.get_component_by_id("browser_use_agent.recording_gif"): gr.update(value=None),
         webui_manager.get_component_by_id("browser_use_agent.browser_view"): gr.update(
-            value="<div style='...'>Browser Cleared</div>"
-        ),
-        webui_manager.get_component_by_id("browser_use_agent.run_button"): gr.update(
-            value="▶️ Submit Task", interactive=True
-        ),
-        webui_manager.get_component_by_id("browser_use_agent.stop_button"): gr.update(
-            interactive=False
-        ),
-        webui_manager.get_component_by_id(
-            "browser_use_agent.pause_resume_button"
-        ): gr.update(value="⏸️ Pause", interactive=False),
-        webui_manager.get_component_by_id("browser_use_agent.clear_button"): gr.update(
-            interactive=True
-        ),
+            value="<div style='...'>Browser Cleared</div>"),
+        webui_manager.get_component_by_id("browser_use_agent.run_button"): gr.update(value="▶️ Submit Task",
+                                                                                     interactive=True),
+        webui_manager.get_component_by_id("browser_use_agent.stop_button"): gr.update(interactive=False),
+        webui_manager.get_component_by_id("browser_use_agent.pause_resume_button"): gr.update(value="⏸️ Pause",
+                                                                                              interactive=False),
+        webui_manager.get_component_by_id("browser_use_agent.clear_button"): gr.update(interactive=True),
     }
 
 
 # --- Tab Creation Function ---
-
 
 def create_browser_use_agent_tab(webui_manager: WebuiManager):
     """
@@ -985,24 +792,19 @@ def create_browser_use_agent_tab(webui_manager: WebuiManager):
             type="messages",
             height=600,
             show_copy_button=True,
+            bubble_full_width=False,
         )
         user_input = gr.Textbox(
             label="Your Task or Response",
             placeholder="Enter your task here or provide assistance when asked.",
             lines=3,
             interactive=True,
-            elem_id="user_input",
+            elem_id="user_input"
         )
         with gr.Row():
-            stop_button = gr.Button(
-                "⏹️ Stop", interactive=False, variant="stop", scale=2
-            )
-            pause_resume_button = gr.Button(
-                "⏸️ Pause", interactive=False, variant="secondary", scale=2, visible=True
-            )
-            clear_button = gr.Button(
-                "🗑️ Clear", interactive=True, variant="secondary", scale=2
-            )
+            stop_button = gr.Button("⏹️ Stop", interactive=False, variant="stop", scale=2)
+            pause_resume_button = gr.Button("⏸️ Pause", interactive=False, variant="secondary", scale=2, visible=True)
+            clear_button = gr.Button("🗑️ Clear", interactive=True, variant="secondary", scale=2)
             run_button = gr.Button("▶️ Submit Task", variant="primary", scale=3)
 
         browser_view = gr.HTML(
@@ -1014,39 +816,24 @@ def create_browser_use_agent_tab(webui_manager: WebuiManager):
         with gr.Column():
             gr.Markdown("### Task Outputs")
             agent_history_file = gr.File(label="Agent History JSON", interactive=False)
-            recording_gif = gr.Image(
-                label="Task Recording GIF",
-                format="gif",
-                interactive=False,
-                type="filepath",
-            )
+            recording_gif = gr.Image(label="Task Recording GIF", format="gif", interactive=False,
+                                     type="filepath")
 
     # --- Store Components in Manager ---
     tab_components.update(
         dict(
-            chatbot=chatbot,
-            user_input=user_input,
-            clear_button=clear_button,
-            run_button=run_button,
-            stop_button=stop_button,
-            pause_resume_button=pause_resume_button,
-            agent_history_file=agent_history_file,
-            recording_gif=recording_gif,
-            browser_view=browser_view,
+            chatbot=chatbot, user_input=user_input, clear_button=clear_button,
+            run_button=run_button, stop_button=stop_button, pause_resume_button=pause_resume_button,
+            agent_history_file=agent_history_file, recording_gif=recording_gif,
+            browser_view=browser_view
         )
     )
-    webui_manager.add_components(
-        "browser_use_agent", tab_components
-    )  # Use "browser_use_agent" as tab_name prefix
+    webui_manager.add_components("browser_use_agent", tab_components)  # Use "browser_use_agent" as tab_name prefix
 
-    all_managed_components = set(
-        webui_manager.get_components()
-    )  # Get all components known to manager
+    all_managed_components = set(webui_manager.get_components())  # Get all components known to manager
     run_tab_outputs = list(tab_components.values())
 
-    async def submit_wrapper(
-            components_dict: Dict[Component, Any],
-    ) -> AsyncGenerator[Dict[Component, Any], None]:
+    async def submit_wrapper(components_dict: Dict[Component, Any]) -> AsyncGenerator[Dict[Component, Any], None]:
         """Wrapper for handle_submit that yields its results."""
         async for update in handle_submit(webui_manager, components_dict):
             yield update
@@ -1068,13 +855,27 @@ def create_browser_use_agent_tab(webui_manager: WebuiManager):
 
     # --- Connect Event Handlers using the Wrappers --
     run_button.click(
-        fn=submit_wrapper, inputs=all_managed_components, outputs=run_tab_outputs, trigger_mode="multiple"
+        fn=submit_wrapper,
+        inputs=all_managed_components,
+        outputs=run_tab_outputs
     )
     user_input.submit(
-        fn=submit_wrapper, inputs=all_managed_components, outputs=run_tab_outputs
+        fn=submit_wrapper,
+        inputs=all_managed_components,
+        outputs=run_tab_outputs
     )
-    stop_button.click(fn=stop_wrapper, inputs=None, outputs=run_tab_outputs)
+    stop_button.click(
+        fn=stop_wrapper,
+        inputs=None,
+        outputs=run_tab_outputs
+    )
     pause_resume_button.click(
-        fn=pause_resume_wrapper, inputs=None, outputs=run_tab_outputs
+        fn=pause_resume_wrapper,
+        inputs=None,
+        outputs=run_tab_outputs
     )
-    clear_button.click(fn=clear_wrapper, inputs=None, outputs=run_tab_outputs)
+    clear_button.click(
+        fn=clear_wrapper,
+        inputs=None,
+        outputs=run_tab_outputs
+    )

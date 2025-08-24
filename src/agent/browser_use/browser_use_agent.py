@@ -1,50 +1,72 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import inspect
+import json
 import logging
 import os
+import re
+import time
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, Generic, List, Optional, TypeVar, Union
+
+from dotenv import load_dotenv
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import (
+	BaseMessage,
+	HumanMessage,
+	SystemMessage,
+)
 
 # from lmnr.sdk.decorators import observe
+from pydantic import BaseModel, ValidationError
+
 from browser_use.agent.gif import create_history_gif
-from browser_use.agent.service import Agent, AgentHookFunc
+from browser_use.agent.memory.service import Memory, MemorySettings
+from browser_use.agent.message_manager.service import MessageManager, MessageManagerSettings
+from browser_use.agent.message_manager.utils import convert_input_messages, extract_json_from_model_output, save_conversation
+from browser_use.agent.prompts import AgentMessagePrompt, PlannerPrompt, SystemPrompt
 from browser_use.agent.views import (
-    ActionResult,
-    AgentHistory,
-    AgentHistoryList,
-    AgentStepInfo,
-    ToolCallingMethod,
+	REQUIRED_LLM_API_ENV_VARS,
+	ActionResult,
+	AgentError,
+	AgentHistory,
+	AgentHistoryList,
+	AgentOutput,
+	AgentSettings,
+	AgentState,
+	AgentStepInfo,
+	StepMetadata,
+	ToolCallingMethod,
 )
-from browser_use.browser.views import BrowserStateHistory
-from browser_use.utils import time_execution_async
-from dotenv import load_dotenv
-from browser_use.agent.message_manager.utils import is_model_without_tool_support
+from browser_use.browser.browser import Browser
+from browser_use.browser.context import BrowserContext
+from browser_use.browser.views import BrowserState, BrowserStateHistory
+from browser_use.controller.registry.views import ActionModel
+from browser_use.controller.service import Controller
+from browser_use.dom.history_tree_processor.service import (
+	DOMHistoryElement,
+	HistoryTreeProcessor,
+)
+from browser_use.exceptions import LLMException
+from browser_use.telemetry.service import ProductTelemetry
+from browser_use.telemetry.views import (
+	AgentEndTelemetryEvent,
+	AgentRunTelemetryEvent,
+	AgentStepTelemetryEvent,
+)
+from browser_use.utils import check_env_variables, time_execution_async, time_execution_sync
+from browser_use.agent.service import Agent, AgentHookFunc
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-SKIP_LLM_API_KEY_VERIFICATION = (
-        os.environ.get("SKIP_LLM_API_KEY_VERIFICATION", "false").lower()[0] in "ty1"
-)
+SKIP_LLM_API_KEY_VERIFICATION = os.environ.get('SKIP_LLM_API_KEY_VERIFICATION', 'false').lower()[0] in 'ty1'
 
 
 class BrowserUseAgent(Agent):
-    def _set_tool_calling_method(self) -> ToolCallingMethod | None:
-        tool_calling_method = self.settings.tool_calling_method
-        if tool_calling_method == 'auto':
-            if is_model_without_tool_support(self.model_name):
-                return 'raw'
-            elif self.chat_model_library == 'ChatGoogleGenerativeAI':
-                return None
-            elif self.chat_model_library == 'ChatOpenAI':
-                return 'function_calling'
-            elif self.chat_model_library == 'AzureChatOpenAI':
-                return 'function_calling'
-            else:
-                return None
-        else:
-            return tool_calling_method
-
-    @time_execution_async("--run (agent)")
+    @time_execution_async('--run (agent)')
     async def run(
             self, max_steps: int = 100, on_step_start: AgentHookFunc | None = None,
             on_step_end: AgentHookFunc | None = None
@@ -65,6 +87,14 @@ class BrowserUseAgent(Agent):
         )
         signal_handler.register()
 
+        # Wait for verification task to complete if it exists
+        if hasattr(self, '_verification_task') and not self._verification_task.done():
+            try:
+                await self._verification_task
+            except Exception:
+                # Error already logged in the task
+                pass
+
         try:
             self._log_agent_run()
 
@@ -75,9 +105,10 @@ class BrowserUseAgent(Agent):
 
             for step in range(max_steps):
                 # Check if waiting for user input after Ctrl+C
-                if self.state.paused:
-                    signal_handler.wait_for_resume()
-                    signal_handler.reset()
+                while self.state.paused:
+                    await asyncio.sleep(0.5)
+                    if self.state.stopped:
+                        break
 
                 # Check if we should stop due to too many failures
                 if self.state.consecutive_failures >= self.settings.max_failures:
@@ -111,24 +142,7 @@ class BrowserUseAgent(Agent):
                     await self.log_completion()
                     break
             else:
-                error_message = 'Failed to complete task in maximum steps'
-
-                self.state.history.history.append(
-                    AgentHistory(
-                        model_output=None,
-                        result=[ActionResult(error=error_message, include_in_memory=True)],
-                        state=BrowserStateHistory(
-                            url='',
-                            title='',
-                            tabs=[],
-                            interacted_element=[],
-                            screenshot=None,
-                        ),
-                        metadata=None,
-                    )
-                )
-
-                logger.info(f'❌ {error_message}')
+                logger.info('❌ Failed to complete task in maximum steps')
 
             return self.state.history
 
@@ -141,23 +155,18 @@ class BrowserUseAgent(Agent):
             # Unregister signal handlers before cleanup
             signal_handler.unregister()
 
-            if self.settings.save_playwright_script_path:
-                logger.info(
-                    f'Agent run finished. Attempting to save Playwright script to: {self.settings.save_playwright_script_path}'
+            self.telemetry.capture(
+                AgentEndTelemetryEvent(
+                    agent_id=self.state.agent_id,
+                    is_done=self.state.history.is_done(),
+                    success=self.state.history.is_successful(),
+                    steps=self.state.n_steps,
+                    max_steps_reached=self.state.n_steps >= max_steps,
+                    errors=self.state.history.errors(),
+                    total_input_tokens=self.state.history.total_input_tokens(),
+                    total_duration_seconds=self.state.history.total_duration_seconds(),
                 )
-                try:
-                    # Extract sensitive data keys if sensitive_data is provided
-                    keys = list(self.sensitive_data.keys()) if self.sensitive_data else None
-                    # Pass browser and context config to the saving method
-                    self.state.history.save_as_playwright_script(
-                        self.settings.save_playwright_script_path,
-                        sensitive_data_keys=keys,
-                        browser_config=self.browser.config,
-                        context_config=self.browser_context.config,
-                    )
-                except Exception as script_gen_err:
-                    # Log any error during script generation/saving
-                    logger.error(f'Failed to save Playwright script: {script_gen_err}', exc_info=True)
+            )
 
             await self.close()
 

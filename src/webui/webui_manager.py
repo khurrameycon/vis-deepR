@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Optional, Dict, List
 import uuid
 import asyncio
-import time
 
 from gradio.components import Component
 from browser_use.browser.browser import Browser
@@ -105,13 +104,7 @@ class WebuiManager:
         for comp_id, comp_val in ui_settings.items():
             if comp_id in self.id_to_component:
                 comp = self.id_to_component[comp_id]
-                if comp.__class__.__name__ == "Chatbot":
-                    update_components[comp] = comp.__class__(value=comp_val, type="messages")
-                else:
-                    update_components[comp] = comp.__class__(value=comp_val)
-                    if comp_id == "agent_settings.planner_llm_provider":
-                        yield update_components  # yield provider, let callback run
-                        time.sleep(0.1)  # wait for Gradio UI callback
+                update_components[comp] = comp.__class__(value=comp_val)
 
         config_status = self.id_to_component["load_save_config.config_status"]
         update_components.update(
